@@ -1,0 +1,442 @@
+﻿<script>
+/* ============================================================
+   Medical.html — Medical Records Management
+   HairCare Pro ERP
+   ============================================================ */
+
+let _medAll = [];
+let _medFiltered = [];
+
+// ── Entry Point ───────────────────────────────────────────────
+async function initPage() {
+  return await renderMedical();
+}
+
+// ── Render Table ──────────────────────────────────────────────
+async function renderMedical() {
+  showLoading('جاري تحميل السجلات الطبية...');
+  try {
+    await refreshCache();
+    _medAll = (await getDB('medicalrecords')) || [];
+    _medFiltered = [..._medAll];
+  } catch (e) {
+    console.error(e);
+    hideLoading();
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>فشل تحميل السجلات الطبية</p></div>`;
+  } finally {
+    hideLoading();
+  }
+
+  const canCreate = canDo('medical', 'c');
+  const canEdit   = canDo('medical', 'u');
+  const canDel    = canDo('medical', 'd');
+  const canRead   = canDo('medical', 'r');
+
+  if (!canRead) {
+    return `<div class="perm-denied"><i class="fa fa-lock fa-3x mb-3"></i><p>ليس لديك صلاحية عرض السجلات الطبية</p></div>`;
+  }
+
+  const total     = _medAll.length;
+  const today     = nowDate();
+  const todayRecs = _medAll.filter(r => r.RecordDate === today).length;
+  const uniqueDocs = [...new Set(_medAll.map(r => r.DoctorID).filter(Boolean))].length;
+  const uniquePats = [...new Set(_medAll.map(r => r.PatientID).filter(Boolean))].length;
+
+  const stats = `
+    <div class="grid-4 mb-4">
+      ${statCard('fa-file-medical',   'إجمالي السجلات',     total,       '',       '#f0f4ff', '#4361ee')}
+      ${statCard('fa-calendar-day',   'سجلات اليوم',         todayRecs,   today,    '#f0fff4', '#06d6a0')}
+      ${statCard('fa-user-md',        'الأطباء المشاركون',  uniqueDocs,  'طبيب',   '#fff7f0', '#fb8500')}
+      ${statCard('fa-users',          'المرضى المسجلون',    uniquePats,  'مريض',   '#fdf0ff', '#9b5de5')}
+    </div>`;
+
+  const toolbar = `
+    <div class="section-header mb-3">
+      <h2 class="text-brand"><i class="fa fa-file-medical me-2"></i>السجلات الطبية</h2>
+      ${canCreate ? `<button class="btn-primary" onclick="openMedicalForm()"><i class="fa fa-plus me-1"></i>إضافة سجل</button>` : ''}
+    </div>
+    <div class="filter-bar mb-3">
+      <input id="med-search" class="input-field" placeholder="بحث بالمريض أو الطبيب أو التشخيص..." oninput="filterMedical()" style="max-width:360px;">
+      <select id="med-filter-doc" class="input-field" onchange="filterMedical()" style="max-width:220px;">
+        <option value="">جميع الأطباء</option>
+        ${buildMedDoctorOptions()}
+      </select>
+    </div>`;
+
+  const rows = _medFiltered.length === 0
+    ? `<div class="table-empty"><i class="fa fa-folder-open fa-2x mb-2"></i><p>لا توجد سجلات طبية</p></div>`
+    : `<div class="table-wrap"><div class="table-inner"><table>
+        <thead><tr>
+          <th>الرقم</th><th>المريض</th><th>الطبيب</th><th>التاريخ</th>
+          <th>الشكوى الرئيسية</th><th>التشخيص</th><th>إجراءات</th>
+        </tr></thead>
+        <tbody>${_medFiltered.map(r => renderMedicalRow(r, canEdit, canDel)).join('')}</tbody>
+      </table></div></div>`;
+
+  return `<div class="fade-in">${stats}${toolbar}<div id="med-table-zone">${rows}</div></div>`;
+}
+
+function renderMedicalRow(r, canEdit, canDel) {
+  const pName     = getPatientName(r.PatientID) || r.PatientID || '—';
+  const dName     = r.DoctorName || getEmpName(r.DoctorID) || '—';
+  const complaint = (r.ChiefComplaint || '').length > 50 ? r.ChiefComplaint.substring(0,50)+'...' : (r.ChiefComplaint || '—');
+  const diagnosis = (r.Diagnosis     || '').length > 50 ? r.Diagnosis.substring(0,50)+'...'     : (r.Diagnosis     || '—');
+  return `
+    <tr>
+      <td><span class="font-mono text-muted" style="font-size:12px;">${r.RecordID}</span></td>
+      <td><strong>${pName}</strong></td>
+      <td>${dName}</td>
+      <td>${fmtDate(r.RecordDate)}</td>
+      <td class="truncate" style="max-width:180px;" title="${r.ChiefComplaint||''}">${complaint}</td>
+      <td class="truncate" style="max-width:180px;" title="${r.Diagnosis||''}">${diagnosis}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn-icon btn-icon-blue"  title="عرض"   onclick="viewMedical('${r.RecordID}')"><i class="fa fa-eye"></i></button>
+          ${canEdit ? `<button class="btn-icon btn-icon-brand" title="تعديل" onclick="openMedicalForm('${r.RecordID}')"><i class="fa fa-edit"></i></button>` : ''}
+          ${canDel  ? `<button class="btn-icon btn-icon-red"   title="حذف"   onclick="deleteMedical('${r.RecordID}')"><i class="fa fa-trash"></i></button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+}
+
+function buildMedDoctorOptions() {
+  const docs = {};
+  _medAll.forEach(r => {
+    if (r.DoctorID) docs[r.DoctorID] = r.DoctorName || getEmpName(r.DoctorID) || r.DoctorID;
+  });
+  return Object.entries(docs).map(([id, name]) => `<option value="${id}">${name}</option>`).join('');
+}
+
+// ── Filter ────────────────────────────────────────────────────
+function filterMedical() {
+  const q   = (document.getElementById('med-search')?.value || '').trim().toLowerCase();
+  const doc = (document.getElementById('med-filter-doc')?.value || '');
+
+  _medFiltered = _medAll.filter(r => {
+    const matchDoc = !doc || r.DoctorID === doc;
+    if (!q) return matchDoc;
+    const hay = [
+      getPatientName(r.PatientID), r.PatientID,
+      r.DoctorName, getEmpName(r.DoctorID),
+      r.ChiefComplaint, r.Diagnosis, r.RecordDate
+    ].filter(Boolean).join(' ').toLowerCase();
+    return matchDoc && hay.includes(q);
+  });
+
+  const canEdit = canDo('medical', 'u');
+  const canDel  = canDo('medical', 'd');
+  const zone = document.getElementById('med-table-zone');
+  if (!zone) return;
+
+  if (_medFiltered.length === 0) {
+    zone.innerHTML = `<div class="table-empty"><i class="fa fa-folder-open fa-2x mb-2"></i><p>لا توجد نتائج</p></div>`;
+  } else {
+    zone.innerHTML = `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr>
+        <th>الرقم</th><th>المريض</th><th>الطبيب</th><th>التاريخ</th>
+        <th>الشكوى الرئيسية</th><th>التشخيص</th><th>إجراءات</th>
+      </tr></thead>
+      <tbody>${_medFiltered.map(r => renderMedicalRow(r, canEdit, canDel)).join('')}</tbody>
+    </table></div></div>`;
+  }
+}
+
+function attachMedicalListeners() {
+  // zone already embedded in renderMedical output — nothing extra needed
+}
+
+// ── Option Builders ───────────────────────────────────────────
+async function buildPatientSelectOptions(selectedID = '') {
+  const patients = (await getDB('patients')) || [];
+  return patients
+    .filter(p => p.Status !== 'محذوف')
+    .map(p => `<option value="${p.PatientID}" ${p.PatientID === selectedID ? 'selected' : ''}>${p.Name} — ${p.Phone}</option>`)
+    .join('');
+}
+
+async function buildMedDoctorSelectOptions(selectedID = '') {
+  const users = (await getDB('users')) || [];
+  return users
+    .filter(u => u.Role === 'DOC_SUP' && u.Status === 'active')
+    .map(d => `<option value="${d.EmpID}" ${d.EmpID === selectedID ? 'selected' : ''}>${d.Name}</option>`)
+    .join('');
+}
+
+// ── Open Form Modal ───────────────────────────────────────────
+async function openMedicalForm(id = null) {
+  showLoading('جاري تحميل النموذج...');
+  try {
+    const rec        = id ? _medAll.find(r => r.RecordID === id) : null;
+    const patOpts    = await buildPatientSelectOptions(rec?.PatientID || '');
+    const docOpts    = await buildMedDoctorSelectOptions(rec?.DoctorID || '');
+    const canSave    = canDo('medical', id ? 'u' : 'c');
+
+    const form = `
+      <form id="med-form" onsubmit="return false;">
+
+        <div class="info-box mb-3" style="padding:10px 14px;">
+          <strong><i class="fa fa-info-circle me-1 text-brand"></i>بيانات السجل الأساسية</strong>
+        </div>
+        <div class="grid-2 mb-3">
+          <div class="form-group">
+            <label class="form-label">المريض <span class="text-danger">*</span></label>
+            <select id="mf-patient" class="input-field" required>
+              <option value="">— اختر المريض —</option>${patOpts}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">الطبيب <span class="text-danger">*</span></label>
+            <select id="mf-doctor" class="input-field" required>
+              <option value="">— اختر الطبيب —</option>${docOpts}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">تاريخ السجل <span class="text-danger">*</span></label>
+            <input id="mf-date" type="date" class="input-field" value="${rec?.RecordDate || nowDate()}" required>
+          </div>
+        </div>
+
+        <div class="divider mb-3"></div>
+        <div class="info-box mb-3" style="padding:10px 14px;">
+          <strong><i class="fa fa-notes-medical me-1 text-brand"></i>الشكاوى والتاريخ المرضي</strong>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">الشكوى الرئيسية <span class="text-danger">*</span></label>
+          <textarea id="mf-chief" class="input-field" rows="3" required placeholder="وصف الشكوى الرئيسية للمريض...">${rec?.ChiefComplaint || ''}</textarea>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">التاريخ المرضي الحالي</label>
+          <textarea id="mf-curr-hist" class="input-field" rows="3" placeholder="تفاصيل الحالة الراهنة...">${rec?.CurrentHistory || ''}</textarea>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">التاريخ المرضي السابق</label>
+          <textarea id="mf-past-hist" class="input-field" rows="3" placeholder="أمراض سابقة، عمليات، إلخ...">${rec?.PastHistory || ''}</textarea>
+        </div>
+
+        <div class="divider mb-3"></div>
+        <div class="info-box mb-3" style="padding:10px 14px;">
+          <strong><i class="fa fa-pills me-1 text-brand"></i>الحساسية والأدوية الحالية</strong>
+        </div>
+        <div class="grid-2 mb-3">
+          <div class="form-group">
+            <label class="form-label">الحساسية</label>
+            <input id="mf-allergies" type="text" class="input-field" value="${rec?.Allergies || ''}" placeholder="مثل: بنسلين، لاتكس...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">الأدوية الحالية</label>
+            <input id="mf-meds" type="text" class="input-field" value="${rec?.CurrentMeds || ''}" placeholder="مثل: أسبرين 100 مجم يومياً...">
+          </div>
+        </div>
+
+        <div class="divider mb-3"></div>
+        <div class="info-box mb-3" style="padding:10px 14px;">
+          <strong><i class="fa fa-stethoscope me-1 text-brand"></i>التشخيص وخطة العلاج</strong>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">التشخيص <span class="text-danger">*</span></label>
+          <textarea id="mf-diagnosis" class="input-field" rows="3" required placeholder="التشخيص الطبي...">${rec?.Diagnosis || ''}</textarea>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">خطة العلاج</label>
+          <textarea id="mf-treatment" class="input-field" rows="3" placeholder="الخطة العلاجية المقترحة...">${rec?.TreatmentPlan || ''}</textarea>
+        </div>
+
+        <div class="divider mb-3"></div>
+        <div class="info-box mb-3" style="padding:10px 14px;">
+          <strong><i class="fa fa-clipboard-list me-1 text-brand"></i>التوصيات وملاحظات الطبيب</strong>
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">الإجراءات الموصى بها</label>
+          <input id="mf-procedures" type="text" class="input-field" value="${rec?.RecommendedProcedures || ''}" placeholder="مثل: زراعة شعر، PRP...">
+        </div>
+        <div class="form-group mb-3">
+          <label class="form-label">ملاحظات الطبيب</label>
+          <textarea id="mf-doc-notes" class="input-field" rows="3" placeholder="ملاحظات إضافية...">${rec?.DoctorNotes || ''}</textarea>
+        </div>
+
+        ${canSave ? `
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeModal()">إلغاء</button>
+          <button type="button" class="btn-primary" onclick="saveMedical('${id || ''}')">
+            <i class="fa fa-save me-1"></i>${id ? 'حفظ التعديلات' : 'إضافة السجل'}
+          </button>
+        </div>` : `
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeModal()">إغلاق</button>
+          <div class="warning-box" style="padding:8px 14px;border-radius:8px;"><i class="fa fa-lock me-1"></i>ليس لديك صلاحية الحفظ</div>
+        </div>`}
+      </form>`;
+
+    openModal(id ? 'تعديل السجل الطبي' : 'إضافة سجل طبي جديد', form, 'wide');
+  } catch (e) {
+    console.error(e);
+    toast('فشل تحميل النموذج', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Save ──────────────────────────────────────────────────────
+async function saveMedical(id) {
+  const patientID  = document.getElementById('mf-patient')?.value?.trim();
+  const doctorID   = document.getElementById('mf-doctor')?.value?.trim();
+  const recDate    = document.getElementById('mf-date')?.value?.trim();
+  const chief      = document.getElementById('mf-chief')?.value?.trim();
+  const currHist   = document.getElementById('mf-curr-hist')?.value?.trim();
+  const pastHist   = document.getElementById('mf-past-hist')?.value?.trim();
+  const allergies  = document.getElementById('mf-allergies')?.value?.trim();
+  const meds       = document.getElementById('mf-meds')?.value?.trim();
+  const diagnosis  = document.getElementById('mf-diagnosis')?.value?.trim();
+  const treatment  = document.getElementById('mf-treatment')?.value?.trim();
+  const procedures = document.getElementById('mf-procedures')?.value?.trim();
+  const docNotes   = document.getElementById('mf-doc-notes')?.value?.trim();
+
+  if (!patientID) { toast('الرجاء اختيار المريض', 'error');          return; }
+  if (!doctorID)  { toast('الرجاء اختيار الطبيب', 'error');          return; }
+  if (!recDate)   { toast('الرجاء تحديد تاريخ السجل', 'error');      return; }
+  if (!chief)     { toast('الرجاء إدخال الشكوى الرئيسية', 'error'); return; }
+  if (!diagnosis) { toast('الرجاء إدخال التشخيص', 'error');          return; }
+
+  showLoading('جاري الحفظ...');
+  try {
+    const users = (await getDB('users')) || [];
+    const doc   = users.find(u => u.EmpID === doctorID);
+    const all   = (await getDB('medicalrecords')) || [];
+    let savedRecordID = id || '';
+
+    if (id) {
+      const idx = all.findIndex(r => r.RecordID === id);
+      if (idx === -1) { toast('السجل غير موجود', 'error'); return; }
+      all[idx] = {
+        ...all[idx],
+        PatientID: patientID, DoctorID: doctorID,
+        DoctorName: doc?.Name || getEmpName(doctorID) || '',
+        RecordDate: recDate, ChiefComplaint: chief,
+        CurrentHistory: currHist, PastHistory: pastHist,
+        Allergies: allergies, CurrentMeds: meds,
+        Diagnosis: diagnosis, TreatmentPlan: treatment,
+        RecommendedProcedures: procedures, DoctorNotes: docNotes
+      };
+    } else {
+      const newID = await genID('MR');
+      savedRecordID = newID;
+      all.push({
+        RecordID: newID, PatientID: patientID, DoctorID: doctorID,
+        DoctorName: doc?.Name || getEmpName(doctorID) || '',
+        RecordDate: recDate, ChiefComplaint: chief,
+        CurrentHistory: currHist, PastHistory: pastHist,
+        Allergies: allergies, CurrentMeds: meds,
+        Diagnosis: diagnosis, TreatmentPlan: treatment,
+        RecommendedProcedures: procedures, DoctorNotes: docNotes
+      });
+    }
+
+    await setDB('medicalrecords', all);
+    const nextStepText = (procedures + ' ' + treatment + ' ' + docNotes).trim();
+    if (nextStepText) {
+      const patientName = getPatientName(patientID) || patientID;
+      if (/عملية|زراعة|operation|hair/i.test(nextStepText)) {
+        await addNotif('NRS_SUP', currentUser.EmpID, `تقييم الطبيب للمريض ${patientName} يحتوي على توصية بعملية/زراعة`, 'Medical', savedRecordID);
+        await addNotif('REC_SUP', currentUser.EmpID, `المريض ${patientName} يحتاج ترتيب موعد عملية حسب تقييم الطبيب`, 'Medical', savedRecordID);
+      } else if (/جلس|ليزر|حقن|prp|متابعة|follow/i.test(nextStepText)) {
+        await addNotif('CS_SUP', currentUser.EmpID, `المريض ${patientName} يحتاج متابعة/جلسات حسب تقييم الطبيب`, 'Medical', savedRecordID);
+      }
+    }
+    toast(id ? 'تم تحديث السجل بنجاح' : 'تم إضافة السجل بنجاح', 'success');
+    closeModal();
+    await navigateTo('medical');
+  } catch (e) {
+    console.error(e);
+    toast('فشل حفظ السجل', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Delete ────────────────────────────────────────────────────
+async function deleteMedical(id) {
+  if (!canDo('medical', 'd')) { toast('ليس لديك صلاحية الحذف', 'error'); return; }
+  if (!confirm('هل أنت متأكد من حذف هذا السجل الطبي؟ لا يمكن التراجع عن هذا الإجراء.')) return;
+  showLoading('جاري الحذف...');
+  try {
+    let all = (await getDB('medicalrecords')) || [];
+    all = all.filter(r => r.RecordID !== id);
+    await setDB('medicalrecords', all);
+    _medAll      = all;
+    _medFiltered = [...all];
+    toast('تم حذف السجل بنجاح', 'success');
+    await navigateTo('medical');
+  } catch (e) {
+    console.error(e);
+    toast('فشل حذف السجل', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── View (Read-only) ──────────────────────────────────────────
+function viewMedical(id) {
+  const r = _medAll.find(x => x.RecordID === id);
+  if (!r) { toast('السجل غير موجود', 'error'); return; }
+
+  const pName = getPatientName(r.PatientID) || r.PatientID || '—';
+  const dName = r.DoctorName || getEmpName(r.DoctorID) || '—';
+
+  const field = (label, value) => {
+    if (!value) return '';
+    return `<div class="form-group mb-3">
+      <div class="form-label text-muted" style="font-size:12px;margin-bottom:4px;">${label}</div>
+      <div style="padding:10px 14px;background:#f8f9ff;border-radius:8px;border:1px solid #e8eaf6;white-space:pre-wrap;line-height:1.7;">${value}</div>
+    </div>`;
+  };
+
+  const html = `
+    <div style="padding:4px 0;">
+      <div style="display:flex;align-items:center;gap:16px;padding:16px;background:linear-gradient(135deg,#4361ee15,#9b5de510);border-radius:12px;margin-bottom:20px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:#4361ee;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="fa fa-file-medical fa-xl" style="color:#fff;"></i>
+        </div>
+        <div>
+          <h3 style="margin:0;color:#4361ee;">${pName}</h3>
+          <div class="text-muted" style="font-size:13px;margin-top:4px;">
+            <i class="fa fa-user-md me-1"></i>${dName}
+            &nbsp;|&nbsp;
+            <i class="fa fa-calendar me-1"></i>${fmtDate(r.RecordDate)}
+          </div>
+          <div style="font-size:11px;color:#aaa;margin-top:2px;" class="font-mono">${r.RecordID}</div>
+        </div>
+      </div>
+
+      <div class="info-box mb-3" style="padding:10px 14px;"><strong><i class="fa fa-notes-medical me-1"></i>الشكاوى والتاريخ المرضي</strong></div>
+      ${field('الشكوى الرئيسية', r.ChiefComplaint)}
+      ${field('التاريخ المرضي الحالي', r.CurrentHistory)}
+      ${field('التاريخ المرضي السابق', r.PastHistory)}
+
+      ${(r.Allergies || r.CurrentMeds) ? `
+      <div class="divider my-3"></div>
+      <div class="info-box mb-3" style="padding:10px 14px;"><strong><i class="fa fa-pills me-1"></i>الحساسية والأدوية</strong></div>
+      <div class="grid-2">
+        ${field('الحساسية', r.Allergies)}
+        ${field('الأدوية الحالية', r.CurrentMeds)}
+      </div>` : ''}
+
+      <div class="divider my-3"></div>
+      <div class="info-box mb-3" style="padding:10px 14px;"><strong><i class="fa fa-stethoscope me-1"></i>التشخيص وخطة العلاج</strong></div>
+      ${field('التشخيص', r.Diagnosis)}
+      ${field('خطة العلاج', r.TreatmentPlan)}
+
+      ${(r.RecommendedProcedures || r.DoctorNotes) ? `
+      <div class="divider my-3"></div>
+      <div class="info-box mb-3" style="padding:10px 14px;"><strong><i class="fa fa-clipboard-list me-1"></i>التوصيات وملاحظات الطبيب</strong></div>
+      ${field('الإجراءات الموصى بها', r.RecommendedProcedures)}
+      ${field('ملاحظات الطبيب', r.DoctorNotes)}` : ''}
+
+      <div class="modal-footer mt-3">
+        ${canDo('medical','u') ? `<button class="btn-primary" onclick="closeModal();openMedicalForm('${r.RecordID}')"><i class="fa fa-edit me-1"></i>تعديل</button>` : ''}
+        <button class="btn-secondary" onclick="closeModal()">إغلاق</button>
+      </div>
+    </div>`;
+
+  openModal('السجل الطبي — ' + pName, html, 'wide');
+}
+</script>

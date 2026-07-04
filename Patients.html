@@ -1,0 +1,528 @@
+﻿<script>
+// ============================================================
+//  Patients.html — HairCare Pro
+//  Full Patients Management Module
+// ============================================================
+
+/* ---------- Module-level cache ---------- */
+let _patientsData = [];
+
+/* ============================================================
+   RENDER — Main list view
+   ============================================================ */
+async function renderPatients() {
+  showLoading('جارٍ تحميل بيانات المرضى…');
+  try {
+    _patientsData = await getDB('patients') || [];
+
+    const canCreate = canDo('patients', 'c');
+    const canRead   = canDo('patients', 'r');
+
+    if (!canRead) {
+      return `<div class="perm-denied"><i class="fa fa-lock"></i><p>ليس لديك صلاحية عرض المرضى</p></div>`;
+    }
+
+    return _buildPatientsView(_patientsData, canCreate);
+  } catch (e) {
+    console.error('renderPatients error:', e);
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>حدث خطأ أثناء تحميل البيانات</p></div>`;
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ---------- Build HTML view from data array ---------- */
+function _buildPatientsView(data, canCreate) {
+  const totalActive   = data.filter(p => p.Status === 'نشط').length;
+  const totalInactive = data.filter(p => p.Status === 'غير نشط').length;
+  const totalReferred = data.filter(p => p.Status === 'محول').length;
+
+  let html = `<div class="fade-in">`;
+
+  // Stats row
+  html += `<div class="grid-4" style="margin-bottom:20px;">
+    ${statCard('fa-users',       'إجمالي المرضى',   data.length,    'مريض مسجّل',  '#f0fdf4','#16a34a')}
+    ${statCard('fa-user-check',  'نشط',             totalActive,   'مريض نشط',    '#eff6ff','#2563eb')}
+    ${statCard('fa-user-times',  'غير نشط',         totalInactive, 'غير نشط',     '#fef2f2','#dc2626')}
+    ${statCard('fa-exchange-alt','محوّل',            totalReferred, 'تم التحويل',  '#fff7ed','#ea580c')}
+  </div>`;
+
+  // Toolbar
+  html += `<div class="filter-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+    <div style="flex:1;min-width:220px;position:relative;">
+      <i class="fa fa-search" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;"></i>
+      <input
+        id="patientSearchInput"
+        type="text"
+        class="input-field"
+        placeholder="بحث بالاسم أو الهاتف…"
+        style="padding-right:36px;"
+        oninput="filterPatients()"
+      />
+    </div>
+    <select id="patientStatusFilter" class="input-field" style="width:160px;" onchange="filterPatients()">
+      <option value="">كل الحالات</option>
+      <option value="نشط">نشط</option>
+      <option value="غير نشط">غير نشط</option>
+      <option value="محول">محول</option>
+    </select>
+    ${canDo('patients','c') ? `<button class="btn-primary" onclick="openPatientForm()"><i class="fa fa-plus"></i> إضافة مريض</button>` : ''}
+  </div>`;
+
+  // Table
+  html += `<div class="table-wrap"><div class="table-inner">
+    <table id="patientsTable">
+      <thead>
+        <tr>
+          <th>الرقم</th>
+          <th>الاسم</th>
+          <th>الهاتف</th>
+          <th>الجنس</th>
+          <th>العمر</th>
+          <th>العنوان</th>
+          <th>الحالة</th>
+          <th>تاريخ التسجيل</th>
+          <th>إجراءات</th>
+        </tr>
+      </thead>
+      <tbody id="patientsTbody">
+        ${_renderPatientRows(data)}
+      </tbody>
+    </table>
+  </div></div>`;
+
+  html += `</div>`;
+  return html;
+}
+
+/* ---------- Render table rows ---------- */
+function _renderPatientRows(data) {
+  if (!data || data.length === 0) {
+    return `<tr><td colspan="9"><div class="table-empty"><i class="fa fa-user-slash"></i><p>لا يوجد مرضى مطابقون</p></div></td></tr>`;
+  }
+
+  const canUpdate = canDo('patients','u');
+  const canDelete = canDo('patients','d');
+  const canRead   = canDo('patients','r');
+
+  return data.map(p => {
+    const statusBadge = p.Status === 'نشط'
+      ? '<span class="badge badge-green">نشط</span>'
+      : p.Status === 'محول'
+        ? '<span class="badge badge-blue">محول</span>'
+        : '<span class="badge badge-gray">غير نشط</span>';
+
+    const actions = `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${canRead   ? `<button class="btn-icon btn-icon-blue"   title="عرض الملف" onclick="viewPatientProfile('${p.PatientID}')"><i class="fa fa-eye"></i></button>` : ''}
+        ${canUpdate ? `<button class="btn-icon btn-icon-yellow" title="تعديل"     onclick="openPatientForm('${p.PatientID}')"><i class="fa fa-edit"></i></button>` : ''}
+        ${canDelete ? `<button class="btn-icon btn-icon-red"    title="حذف"       onclick="deletePatient('${p.PatientID}')"><i class="fa fa-trash"></i></button>` : ''}
+      </div>`;
+
+    return `<tr>
+      <td class="font-mono" style="font-size:.8rem;">${p.PatientID||'-'}</td>
+      <td><strong>${p.Name||'-'}</strong></td>
+      <td class="font-mono">${p.Phone||'-'}</td>
+      <td>${p.Gender||'-'}</td>
+      <td>${p.Age||'-'}</td>
+      <td class="truncate" style="max-width:140px;">${p.Address||'-'}</td>
+      <td>${statusBadge}</td>
+      <td>${fmtDate(p.CreatedAt)||'-'}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* ============================================================
+   FILTER — Client-side, no DB call
+   ============================================================ */
+function filterPatients() {
+  const query  = (document.getElementById('patientSearchInput')?.value || '').trim().toLowerCase();
+  const status = (document.getElementById('patientStatusFilter')?.value || '');
+
+  const filtered = _patientsData.filter(p => {
+    const matchSearch = !query
+      || (p.Name  || '').toLowerCase().includes(query)
+      || (p.Phone || '').toLowerCase().includes(query);
+    const matchStatus = !status || p.Status === status;
+    return matchSearch && matchStatus;
+  });
+
+  const tbody = document.getElementById('patientsTbody');
+  if (tbody) {
+    tbody.innerHTML = _renderPatientRows(filtered);
+  }
+}
+
+/* ============================================================
+   FORM — Add / Edit patient
+   ============================================================ */
+function openPatientForm(id) {
+  const isEdit  = !!id;
+  const patient = isEdit ? (_patientsData.find(p => p.PatientID === id) || {}) : {};
+
+  const canSave = isEdit ? canDo('patients','u') : canDo('patients','c');
+
+  const formHTML = `
+    <div style="padding:4px 0;">
+      <div class="grid-2">
+        <div class="form-group">
+          <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+          <input id="pf_Name" class="input-field" type="text" value="${_esc(patient.Name)}" placeholder="أدخل الاسم الكامل" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">رقم الهاتف <span class="text-danger">*</span></label>
+          <input id="pf_Phone" class="input-field" type="tel" value="${_esc(patient.Phone)}" placeholder="01xxxxxxxxx" />
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label class="form-label">الجنس</label>
+          <select id="pf_Gender" class="input-field">
+            <option value="">-- اختر --</option>
+            <option value="ذكر"   ${patient.Gender==='ذكر'  ?'selected':''}>ذكر</option>
+            <option value="أنثى"  ${patient.Gender==='أنثى' ?'selected':''}>أنثى</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">العمر</label>
+          <input id="pf_Age" class="input-field" type="number" min="1" max="120" value="${_esc(patient.Age)}" placeholder="العمر بالسنوات" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">العنوان</label>
+        <input id="pf_Address" class="input-field" type="text" value="${_esc(patient.Address)}" placeholder="المحافظة / الحي / الشارع" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">الحالة</label>
+        <select id="pf_Status" class="input-field">
+          <option value="نشط"      ${(!patient.Status||patient.Status==='نشط')     ?'selected':''}>نشط</option>
+          <option value="غير نشط"  ${patient.Status==='غير نشط'                    ?'selected':''}>غير نشط</option>
+          <option value="محول"     ${patient.Status==='محول'                        ?'selected':''}>محول</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">ملاحظات</label>
+        <textarea id="pf_Notes" class="input-field" rows="3" placeholder="أي ملاحظات إضافية…">${_esc(patient.Notes)}</textarea>
+      </div>
+
+      ${canSave ? `
+        <div class="modal-footer" style="margin-top:16px;">
+          <button class="btn-primary" onclick="savePatient('${id||''}')">
+            <i class="fa fa-save"></i> ${isEdit ? 'حفظ التعديلات' : 'إضافة المريض'}
+          </button>
+          <button class="btn-secondary" onclick="closeModal()">
+            <i class="fa fa-times"></i> إلغاء
+          </button>
+        </div>
+      ` : `<div class="warning-box"><i class="fa fa-lock"></i> ليس لديك صلاحية ${isEdit?'التعديل':'الإضافة'}</div>`}
+    </div>`;
+
+  openModal(isEdit ? `تعديل بيانات: ${patient.Name || ''}` : 'إضافة مريض جديد', formHTML);
+}
+
+/* ============================================================
+   SAVE — Create or Update
+   ============================================================ */
+async function savePatient(id) {
+  const isEdit = !!id;
+
+  const name    = document.getElementById('pf_Name')?.value.trim();
+  const phone   = document.getElementById('pf_Phone')?.value.trim();
+  const gender  = document.getElementById('pf_Gender')?.value;
+  const age     = document.getElementById('pf_Age')?.value.trim();
+  const address = document.getElementById('pf_Address')?.value.trim();
+  const status  = document.getElementById('pf_Status')?.value;
+  const notes   = document.getElementById('pf_Notes')?.value.trim();
+
+  if (!name)  { toast('الاسم الكامل مطلوب', 'error');  return; }
+  if (!phone) { toast('رقم الهاتف مطلوب', 'error'); return; }
+
+  showLoading('جارٍ الحفظ…');
+  try {
+    let patients = await getDB('patients') || [];
+
+    if (isEdit) {
+      // Duplicate phone check (excluding self)
+      const dupPhone = patients.find(p => p.Phone === phone && p.PatientID !== id);
+      if (dupPhone) { toast('رقم الهاتف مسجّل لمريض آخر', 'error'); return; }
+
+      patients = patients.map(p => {
+        if (p.PatientID !== id) return p;
+        return { ...p, Name: name, Phone: phone, Gender: gender, Age: age, Address: address, Status: status, Notes: notes };
+      });
+      toast('تم تحديث بيانات المريض بنجاح', 'success');
+    } else {
+      // Duplicate phone check
+      const dupPhone = patients.find(p => p.Phone === phone);
+      if (dupPhone) { toast('رقم الهاتف مسجّل مسبقاً', 'error'); return; }
+
+      const newID = await genID('P');
+      const newPatient = {
+        PatientID: newID,
+        Name:      name,
+        Phone:     phone,
+        Gender:    gender,
+        Age:       age,
+        Address:   address,
+        Status:    status || 'نشط',
+        CreatedAt: nowDateTime(),
+        Notes:     notes,
+      };
+      patients.push(newPatient);
+      toast('تم إضافة المريض بنجاح', 'success');
+    }
+
+    await setDB('patients', patients);
+    await refreshCache();
+    closeModal();
+    await navigateTo('patients');
+  } catch (e) {
+    console.error('savePatient error:', e);
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ============================================================
+   DELETE
+   ============================================================ */
+async function deletePatient(id) {
+  if (!canDo('patients','d')) {
+    toast('ليس لديك صلاحية الحذف', 'error');
+    return;
+  }
+
+  const patient = _patientsData.find(p => p.PatientID === id);
+  const name    = patient ? patient.Name : id;
+
+  if (!confirm(`هل أنت متأكد من حذف المريض "${name}"؟\nسيتم حذف بيانات المريض نهائياً ولا يمكن التراجع.`)) return;
+
+  showLoading('جارٍ الحذف…');
+  try {
+    let patients = await getDB('patients') || [];
+    patients = patients.filter(p => p.PatientID !== id);
+    await setDB('patients', patients);
+    await refreshCache();
+    toast('تم حذف المريض بنجاح', 'success');
+    await navigateTo('patients');
+  } catch (e) {
+    console.error('deletePatient error:', e);
+    toast('حدث خطأ أثناء الحذف', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ============================================================
+   VIEW PROFILE — Wide modal: full info + visits + records + ops
+   ============================================================ */
+async function viewPatientProfile(id) {
+  showLoading('جارٍ تحميل ملف المريض…');
+  try {
+    const [patients, visits, medicalrecords, operations] = await Promise.all([
+      getDB('patients'),
+      getDB('visits'),
+      getDB('medicalrecords'),
+      getDB('operations'),
+    ]);
+
+    const patient = (patients || []).find(p => p.PatientID === id);
+    if (!patient) {
+      toast('لم يتم العثور على المريض', 'error');
+      return;
+    }
+
+    const ptVisits = (visits        || []).filter(v => v.PatientID === id);
+    const ptMRs    = (medicalrecords|| []).filter(m => m.PatientID === id);
+    const ptOps    = (operations    || []).filter(o => o.PatientID === id);
+
+    const totalPaid = ptVisits.reduce((s,v)=>s+(parseFloat(v.PaidAmount)||0),0);
+    const totalRem  = ptVisits.reduce((s,v)=>s+(parseFloat(v.RemainingAmount)||0),0);
+
+    const statusBadge = patient.Status === 'نشط'
+      ? '<span class="badge badge-green">نشط</span>'
+      : patient.Status === 'محول'
+        ? '<span class="badge badge-blue">محول</span>'
+        : '<span class="badge badge-gray">غير نشط</span>';
+
+    let html = `
+      <!-- ====== Patient Info Card ====== -->
+      <div class="info-box" style="margin-bottom:20px;">
+        <div class="grid-2" style="gap:12px;">
+          <div>
+            <div style="font-size:1.4rem;font-weight:700;margin-bottom:8px;color:var(--brand);">
+              <i class="fa fa-user-circle" style="margin-left:8px;"></i>${patient.Name}
+            </div>
+            <table style="font-size:.9rem;border-collapse:collapse;width:100%;">
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">رقم المريض</td><td class="font-mono">${patient.PatientID}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">الهاتف</td>      <td class="font-mono">${patient.Phone||'-'}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">الجنس</td>       <td>${patient.Gender||'-'}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">العمر</td>       <td>${patient.Age||'-'}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">العنوان</td>    <td>${patient.Address||'-'}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">الحالة</td>     <td>${statusBadge}</td></tr>
+              <tr><td class="text-muted" style="padding:4px 8px 4px 16px;white-space:nowrap;">تاريخ التسجيل</td><td>${fmtDate(patient.CreatedAt)||'-'}</td></tr>
+            </table>
+          </div>
+          <div>
+            <div style="font-size:.85rem;color:var(--muted);margin-bottom:8px;">ملاحظات</div>
+            <div style="font-size:.9rem;background:#f9fafb;padding:10px 12px;border-radius:8px;min-height:80px;">
+              ${patient.Notes || '<span class="text-muted">لا توجد ملاحظات</span>'}
+            </div>
+            <div class="grid-2" style="margin-top:12px;gap:8px;">
+              <div style="background:#f0fdf4;padding:10px;border-radius:8px;text-align:center;">
+                <div style="font-size:1.2rem;font-weight:700;color:#16a34a;">${fmtCurrency(totalPaid)}</div>
+                <div class="text-muted" style="font-size:.78rem;">إجمالي المدفوع</div>
+              </div>
+              <div style="background:#fef2f2;padding:10px;border-radius:8px;text-align:center;">
+                <div style="font-size:1.2rem;font-weight:700;color:#dc2626;">${fmtCurrency(totalRem)}</div>
+                <div class="text-muted" style="font-size:.78rem;">المبالغ المستحقة</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== Tabs Summary ====== -->
+      <div class="grid-3" style="margin-bottom:20px;gap:10px;">
+        <div style="background:#eff6ff;padding:12px 16px;border-radius:10px;text-align:center;border-right:4px solid #2563eb;">
+          <div style="font-size:1.6rem;font-weight:700;color:#2563eb;">${ptVisits.length}</div>
+          <div class="text-muted" style="font-size:.85rem;">زيارة</div>
+        </div>
+        <div style="background:#f0fdf4;padding:12px 16px;border-radius:10px;text-align:center;border-right:4px solid #16a34a;">
+          <div style="font-size:1.6rem;font-weight:700;color:#16a34a;">${ptMRs.length}</div>
+          <div class="text-muted" style="font-size:.85rem;">سجل طبي</div>
+        </div>
+        <div style="background:#fefce8;padding:12px 16px;border-radius:10px;text-align:center;border-right:4px solid #ca8a04;">
+          <div style="font-size:1.6rem;font-weight:700;color:#ca8a04;">${ptOps.length}</div>
+          <div class="text-muted" style="font-size:.85rem;">عملية</div>
+        </div>
+      </div>
+
+      <!-- ====== Visits ====== -->
+      <div class="section-header" style="margin:16px 0 10px;">
+        <h4 style="margin:0;display:flex;align-items:center;gap:6px;font-size:.95rem;">
+          <i class="fa fa-calendar-check text-brand"></i> الزيارات
+        </h4>
+      </div>`;
+
+    if (ptVisits.length === 0) {
+      html += `<div class="table-empty" style="padding:20px;"><i class="fa fa-calendar-times"></i><p>لا توجد زيارات مسجّلة</p></div>`;
+    } else {
+      html += `<div class="table-wrap"><div class="table-inner"><table>
+        <thead><tr>
+          <th>رقم الزيارة</th><th>الإجراء</th><th>الطبيب</th>
+          <th>تاريخ الحجز</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th>
+        </tr></thead>
+        <tbody>`;
+      ptVisits.sort((a,b)=>(b.BookingDate||'').localeCompare(a.BookingDate||'')).forEach(v => {
+        const rem = parseFloat(v.RemainingAmount)||0;
+        html += `<tr>
+          <td class="font-mono" style="font-size:.8rem;">${v.VisitID||'-'}</td>
+          <td>${v.ProcedureName||'-'}</td>
+          <td>${v.DoctorName||getEmpName(v.DoctorID)||'-'}</td>
+          <td>${fmtDate(v.BookingDate)||'-'}</td>
+          <td>${fmtCurrency(parseFloat(v.TotalAmount)||0)}</td>
+          <td>${fmtCurrency(parseFloat(v.PaidAmount)||0)}</td>
+          <td class="${rem>0?'text-danger':''}">${fmtCurrency(rem)}</td>
+          <td>${visitStatusBadge(v.Status)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></div>`;
+    }
+
+    // ====== Medical Records ======
+    html += `
+      <div class="section-header" style="margin:20px 0 10px;">
+        <h4 style="margin:0;display:flex;align-items:center;gap:6px;font-size:.95rem;">
+          <i class="fa fa-file-medical text-brand"></i> السجلات الطبية
+        </h4>
+      </div>`;
+
+    if (ptMRs.length === 0) {
+      html += `<div class="table-empty" style="padding:20px;"><i class="fa fa-file-medical-alt"></i><p>لا توجد سجلات طبية</p></div>`;
+    } else {
+      ptMRs.sort((a,b)=>(b.RecordDate||'').localeCompare(a.RecordDate||'')).forEach(mr => {
+        html += `
+          <div class="info-box" style="margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
+              <div>
+                <span class="font-mono text-muted" style="font-size:.8rem;">${mr.RecordID||'-'}</span>
+                <span class="badge badge-blue" style="margin-right:8px;">${mr.DoctorName||getEmpName(mr.DoctorID)||'-'}</span>
+              </div>
+              <span class="text-muted" style="font-size:.85rem;">${fmtDate(mr.RecordDate)||'-'}</span>
+            </div>
+            <div class="grid-2" style="gap:10px;font-size:.88rem;">
+              ${mr.ChiefComplaint   ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">الشكوى الرئيسية</div><div>${mr.ChiefComplaint}</div></div>`   : ''}
+              ${mr.Diagnosis        ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">التشخيص</div><div>${mr.Diagnosis}</div></div>`               : ''}
+              ${mr.TreatmentPlan   ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">خطة العلاج</div><div>${mr.TreatmentPlan}</div></div>`         : ''}
+              ${mr.DoctorNotes     ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">ملاحظات الطبيب</div><div>${mr.DoctorNotes}</div></div>`       : ''}
+              ${mr.Allergies       ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">الحساسية</div><div class="text-danger">${mr.Allergies}</div></div>` : ''}
+              ${mr.CurrentMeds     ? `<div><div class="text-muted" style="font-size:.78rem;margin-bottom:3px;">الأدوية الحالية</div><div>${mr.CurrentMeds}</div></div>`       : ''}
+            </div>
+          </div>`;
+      });
+    }
+
+    // ====== Operations ======
+    html += `
+      <div class="section-header" style="margin:20px 0 10px;">
+        <h4 style="margin:0;display:flex;align-items:center;gap:6px;font-size:.95rem;">
+          <i class="fa fa-procedures text-brand"></i> العمليات
+        </h4>
+      </div>`;
+
+    if (ptOps.length === 0) {
+      html += `<div class="table-empty" style="padding:20px;"><i class="fa fa-procedures"></i><p>لا توجد عمليات مسجّلة</p></div>`;
+    } else {
+      html += `<div class="table-wrap"><div class="table-inner"><table>
+        <thead><tr>
+          <th>رقم العملية</th><th>تاريخ العملية</th><th>الغرفة</th>
+          <th>نوع الكسر</th><th>عدد الطعوم</th><th>الحالة</th>
+        </tr></thead>
+        <tbody>`;
+      ptOps.sort((a,b)=>(b.OperationDate||'').localeCompare(a.OperationDate||'')).forEach(o => {
+        html += `<tr>
+          <td class="font-mono" style="font-size:.8rem;">${o.OperationID||'-'}</td>
+          <td>${fmtDate(o.OperationDate)||'-'}</td>
+          <td>${o.RoomNum||'-'}</td>
+          <td>${o.PunchType||'-'}</td>
+          <td class="font-mono">${o.GraftsCount||'-'}</td>
+          <td>${opStatusBadge(o.Status)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></div>`;
+    }
+
+    html += `
+      <div class="modal-footer" style="margin-top:20px;">
+        <button class="btn-secondary" onclick="closeModal()"><i class="fa fa-times"></i> إغلاق</button>
+        ${canDo('patients','u') ? `<button class="btn-primary" onclick="closeModal();setTimeout(()=>openPatientForm('${id}'),100);"><i class="fa fa-edit"></i> تعديل البيانات</button>` : ''}
+      </div>`;
+
+    openModal(`ملف المريض — ${patient.Name}`, html, 'wide');
+  } catch (e) {
+    console.error('viewPatientProfile error:', e);
+    toast('حدث خطأ أثناء تحميل الملف', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+function _esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v)
+    .replace(/&/g,'&amp;')
+    .replace(/"/g,'&quot;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+</script>

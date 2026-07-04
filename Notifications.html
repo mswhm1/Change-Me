@@ -1,0 +1,251 @@
+﻿<script>
+/* ============================================================
+   Notifications.html — HairCare Pro ERP
+   Notifications Module
+   ============================================================ */
+
+let _notifAll = [];
+let _notifFiltered = [];
+let _notifFilter = 'all';   // all | unread | read
+let _notifType = '';
+
+const NOTIF_REF_TYPES = ['زيارة', 'مريض', 'عملية', 'مخزون', 'مستخدم', 'حملة', 'متابعة', 'أخرى'];
+
+const ROLE_NAMES_N = {
+  ADM_SUP: 'مدير النظام', DOC_SUP: 'طبيب', NRS_SUP: 'تمريض',
+  HR_SUP: 'موارد بشرية', MARKET_SUP: 'تسويق', SALES_SUP: 'مبيعات',
+  ACC_SUP: 'محاسبة', REC_SUP: 'استقبال', CS_SUP: 'خدمة عملاء', ALL: 'الجميع'
+};
+
+const NOTIF_TYPE_COLORS = {
+  'زيارة': 'badge-blue', 'مريض': 'badge-cyan', 'عملية': 'badge-purple',
+  'مخزون': 'badge-orange', 'مستخدم': 'badge-yellow', 'حملة': 'badge-green',
+  'متابعة': 'badge-brand', 'أخرى': 'badge-gray'
+};
+
+// ── RENDER ───────────────────────────────────────────────────
+async function renderNotifications() {
+  showLoading('جاري تحميل الإشعارات…');
+  try {
+    const notifs = await getDB('notifications') || [];
+    _notifAll = notifs.filter(function(n) {
+      return n.ToRole === currentUser.Role ||
+             n.ToUser === currentUser.EmpID ||
+             n.ToRole === 'ALL';
+    });
+    _notifFiltered = [..._notifAll];
+
+    const unreadCount = _notifAll.filter(function(n){ return !n.IsRead; }).length;
+    const totalCount  = _notifAll.length;
+
+    const unreadBadge = unreadCount > 0
+      ? ' <span class="badge badge-red">' + unreadCount + '</span>'
+      : '';
+
+    const typeOpts = NOTIF_REF_TYPES.map(function(t) {
+      return '<option value="' + t + '" ' + (_notifType === t ? 'selected' : '') + '>' + t + '</option>';
+    }).join('');
+
+    const sendBtn = currentUser.Role === 'ADM_SUP'
+      ? '<button class="btn-primary" onclick="openSendNotifForm()"><i class="fa fa-paper-plane"></i> إرسال إشعار</button>'
+      : '';
+
+    const markAllBtn = '<button class="btn-secondary" onclick="markAllRead()"><i class="fa fa-check-double"></i> تعليم الكل كمقروء</button>';
+
+    const filterBtns =
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<button class="btn-secondary ' + (_notifFilter === 'all' ? 'active' : '') + '" onclick="_notifFilter=\'all\';filterNotifPage()" style="' + (_notifFilter === 'all' ? 'background:#4361ee;color:#fff' : '') + '">الكل (' + totalCount + ')</button>' +
+        '<button class="btn-secondary" onclick="_notifFilter=\'unread\';filterNotifPage()" style="' + (_notifFilter === 'unread' ? 'background:#4361ee;color:#fff' : '') + '">غير مقروء' + unreadBadge + '</button>' +
+        '<button class="btn-secondary" onclick="_notifFilter=\'read\';filterNotifPage()" style="' + (_notifFilter === 'read' ? 'background:#4361ee;color:#fff' : '') + '">مقروء</button>' +
+        '<select class="input-field" style="min-width:130px" onchange="_notifType=this.value;filterNotifPage()">' +
+          '<option value="">كل الأنواع</option>' + typeOpts +
+        '</select>' +
+        '<div style="flex:1"></div>' +
+        markAllBtn + sendBtn +
+      '</div>';
+
+    setTimeout(filterNotifPage, 0);
+    return '<div class="section-header" style="margin-bottom:16px">' +
+      '<h3 style="margin:0"><i class="fa fa-bell text-brand"></i> الإشعارات</h3>' +
+      '</div>' +
+      '<div style="margin-bottom:16px">' + filterBtns + '</div>' +
+      '<div id="notif-table-wrap"></div>';
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء تحميل الإشعارات', 'error');
+    return '<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>حدث خطأ أثناء تحميل الإشعارات</p></div>';
+  } finally {
+    hideLoading();
+  }
+}
+
+function filterNotifPage() {
+  _notifFiltered = _notifAll.filter(function(n) {
+    if (_notifFilter === 'unread' && n.IsRead) return false;
+    if (_notifFilter === 'read' && !n.IsRead) return false;
+    if (_notifType && n.RefType !== _notifType) return false;
+    return true;
+  });
+  _renderNotifTable();
+}
+
+function _renderNotifTable() {
+  const wrap = document.getElementById('notif-table-wrap');
+  if (!wrap) return;
+
+  if (!_notifFiltered.length) {
+    wrap.innerHTML = '<div class="table-empty"><i class="fa fa-bell-slash"></i><p>لا توجد إشعارات تطابق الفلتر</p></div>';
+    return;
+  }
+
+  const rows = _notifFiltered
+    .sort(function(a, b){ return (b.CreatedAt || '').localeCompare(a.CreatedAt || ''); })
+    .map(function(n) {
+      const readBadge = n.IsRead
+        ? '<span class="badge badge-gray">مقروء</span>'
+        : '<span class="badge badge-red">غير مقروء</span>';
+      const typeBadge = n.RefType
+        ? '<span class="badge ' + (NOTIF_TYPE_COLORS[n.RefType] || 'badge-gray') + '">' + n.RefType + '</span>'
+        : '<span class="badge badge-gray">عام</span>';
+      const msgStyle = n.IsRead ? 'color:#888' : 'font-weight:600';
+      const viewBtn = '<button class="btn-icon btn-icon-blue" title="عرض" onclick="viewNotif(\'' + n.NotifID + '\')"><i class="fa fa-eye"></i></button>';
+      const markBtn = !n.IsRead
+        ? '<button class="btn-icon btn-icon-brand" title="تعليم كمقروء" onclick="readNotifPage(\'' + n.NotifID + '\')"><i class="fa fa-check"></i></button>'
+        : '';
+      return '<tr style="' + (n.IsRead ? '' : 'background:#f8f9ff') + '">' +
+        '<td style="' + msgStyle + ';max-width:320px">' +
+          '<div class="truncate">' + (n.Message || '—') + '</div>' +
+        '</td>' +
+        '<td>' + (n.FromUser || '—') + '</td>' +
+        '<td>' + typeBadge + '</td>' +
+        '<td class="text-muted">' + fmtDate(n.CreatedAt) + '</td>' +
+        '<td>' + readBadge + '</td>' +
+        '<td style="white-space:nowrap">' + viewBtn + markBtn + '</td>' +
+      '</tr>';
+    }).join('');
+
+  wrap.innerHTML =
+    '<div class="table-wrap"><div class="table-inner"><table>' +
+      '<thead><tr>' +
+        '<th>الإشعار</th><th>من</th><th>النوع</th><th>التاريخ</th><th>الحالة</th><th>إجراءات</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div></div>';
+}
+
+// ── MARK READ ─────────────────────────────────────────────────
+async function readNotifPage(id) {
+  try {
+    let notifs = await getDB('notifications') || [];
+    const idx = notifs.findIndex(function(n){ return n.NotifID === id; });
+    if (idx < 0) return;
+    notifs[idx] = Object.assign({}, notifs[idx], { IsRead: true });
+    await setDB('notifications', notifs);
+    toast('تم تعليم الإشعار كمقروء', 'success');
+    await renderNotifications();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ', 'error');
+  }
+}
+
+async function markAllRead() {
+  if (!_notifAll.filter(function(n){ return !n.IsRead; }).length) {
+    toast('جميع الإشعارات مقروءة بالفعل', 'info');
+    return;
+  }
+  showLoading('جاري التحديث…');
+  try {
+    let notifs = await getDB('notifications') || [];
+    const myIds = new Set(_notifAll.map(function(n){ return n.NotifID; }));
+    notifs = notifs.map(function(n) {
+      return myIds.has(n.NotifID) ? Object.assign({}, n, { IsRead: true }) : n;
+    });
+    await setDB('notifications', notifs);
+    toast('تم تعليم جميع الإشعارات كمقروءة', 'success');
+    await renderNotifications();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── VIEW SINGLE ───────────────────────────────────────────────
+async function viewNotif(id) {
+  const n = _notifAll.find(function(x){ return x.NotifID === id; });
+  if (!n) return;
+
+  // Auto mark as read
+  if (!n.IsRead) { await readNotifPage(id); return; }
+
+  const html =
+    '<div class="info-box" style="margin-bottom:16px">' +
+      '<p style="font-size:16px;margin:0">' + (n.Message || '—') + '</p>' +
+    '</div>' +
+    '<div class="grid-2" style="gap:10px">' +
+      '<div><span class="text-muted form-label">من:</span> ' + (n.FromUser || '—') + '</div>' +
+      '<div><span class="text-muted form-label">النوع:</span> ' + (n.RefType || 'عام') + '</div>' +
+      '<div><span class="text-muted form-label">إلى (دور):</span> ' + (ROLE_NAMES_N[n.ToRole] || n.ToRole || '—') + '</div>' +
+      '<div><span class="text-muted form-label">التاريخ:</span> ' + fmtDate(n.CreatedAt) + '</div>' +
+      (n.RefID ? '<div><span class="text-muted form-label">المرجع:</span> ' + n.RefID + '</div>' : '') +
+    '</div>';
+
+  openModal('تفاصيل الإشعار', html, 'narrow');
+}
+
+// ── SEND NOTIF FORM (ADM_SUP only) ───────────────────────────
+function openSendNotifForm() {
+  if (currentUser.Role !== 'ADM_SUP') { toast('هذه الميزة للمدير فقط', 'error'); return; }
+
+  const roleOpts = Object.keys(ROLE_NAMES_N).map(function(r) {
+    return '<option value="' + r + '">' + ROLE_NAMES_N[r] + '</option>';
+  }).join('');
+
+  const typeOpts = NOTIF_REF_TYPES.map(function(t) {
+    return '<option value="' + t + '">' + t + '</option>';
+  }).join('');
+
+  const html =
+    '<div class="form-group">' +
+      '<label class="form-label">إرسال إلى (الدور) *</label>' +
+      '<select class="input-field" id="sn-role"><option value="ALL">الجميع</option>' + roleOpts + '</select>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">نوع الإشعار</label>' +
+      '<select class="input-field" id="sn-type"><option value="أخرى">أخرى</option>' + typeOpts + '</select>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">نص الإشعار *</label>' +
+      '<textarea class="input-field" id="sn-msg" rows="4" placeholder="اكتب نص الإشعار هنا…"></textarea>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="btn-primary" onclick="_sendNotif()"><i class="fa fa-paper-plane"></i> إرسال</button>' +
+    '</div>';
+
+  openModal('إرسال إشعار جديد', html, 'narrow');
+}
+
+async function _sendNotif() {
+  const toRole = (document.getElementById('sn-role') || {}).value;
+  const refType = (document.getElementById('sn-type') || {}).value;
+  const msg    = ((document.getElementById('sn-msg') || {}).value || '').trim();
+
+  if (!msg) { toast('يرجى كتابة نص الإشعار', 'error'); return; }
+  if (!toRole) { toast('يرجى اختيار المستلم', 'error'); return; }
+
+  showLoading('جاري الإرسال…');
+  try {
+    await addNotif(toRole, currentUser.Name, msg, refType, '');
+    toast('تم إرسال الإشعار بنجاح', 'success');
+    closeModal();
+    await renderNotifications();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء الإرسال', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+</script>

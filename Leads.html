@@ -1,0 +1,387 @@
+﻿<script>
+/* =========================================================
+   Leads.html — Lead Management Module
+   HairCare Pro ERP
+   ========================================================= */
+
+let _leadsData     = [];
+let _campaigns     = [];
+let _leadsFiltered = [];
+
+/* ─── Entry Point ─────────────────────────────────────── */
+async function renderLeads() {
+  if (!canDo('leads', 'r')) {
+    return `<div class="perm-denied"><i class="fa fa-lock"></i><p>ليس لديك صلاحية لعرض هذه الصفحة.</p></div>`;
+  }
+
+  showLoading('جارٍ تحميل العملاء المحتملين…');
+  try {
+    [_leadsData, _campaigns] = await Promise.all([getDB('leads'), getDB('campaigns')]);
+    _leadsData  = Array.isArray(_leadsData)  ? _leadsData  : [];
+    _campaigns  = Array.isArray(_campaigns)  ? _campaigns  : [];
+    _leadsFiltered = [..._leadsData];
+  } catch (e) {
+    hideLoading();
+    toast('فشل تحميل البيانات', 'error');
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>فشل تحميل البيانات</p></div>`;
+  }
+  hideLoading();
+  return _renderLeadsPage();
+}
+
+function _renderLeadsPage() {
+  const total = _leadsFiltered.length;
+  const fup   = _leadsFiltered.filter(l => l.Status === 'FUP').length;
+  const res   = _leadsFiltered.filter(l => l.Status === 'RES').length;
+  const lost  = _leadsFiltered.filter(l => l.Status === 'LOST').length;
+
+  const sources = [...new Set(_leadsData.map(l => l.AdSource).filter(Boolean))];
+
+  const addBtn = canDo('leads', 'c')
+    ? `<button class="btn-primary" onclick="openLeadForm()"><i class="fa fa-plus"></i> إضافة عميل محتمل</button>`
+    : '';
+
+  const sourceOptions = sources.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  const html = `
+<div class="fade-in">
+  <div class="grid-4" style="margin-bottom:20px;">
+    ${statCard('fa-users',        'إجمالي العملاء', total, 'جميع السجلات',  '#6c63ff', '#fff')}
+    ${statCard('fa-clock',        'قيد المتابعة',   fup,   'FUP',           '#f59e0b', '#fff')}
+    ${statCard('fa-check-circle', 'محوّل',           res,   'RES',           '#10b981', '#fff')}
+    ${statCard('fa-times-circle', 'فقدان',           lost,  'LOST',          '#ef4444', '#fff')}
+  </div>
+
+  <div class="section-header">
+    <span style="font-size:1.1rem;font-weight:700;"><i class="fa fa-funnel-dollar text-brand"></i> العملاء المحتملون</span>
+    ${addBtn}
+  </div>
+  <div class="filter-bar">
+    <input  class="input-field" id="leads-search"  type="text"   placeholder="بحث بالاسم أو الهاتف…"  oninput="filterLeads()" style="max-width:260px;">
+    <select class="input-field" id="leads-status"  onchange="filterLeads()" style="max-width:160px;">
+      <option value="">كل الحالات</option>
+      <option value="FUP">متابعة</option>
+      <option value="RES">محوّل</option>
+      <option value="LOST">فقدان</option>
+    </select>
+    <select class="input-field" id="leads-source"  onchange="filterLeads()" style="max-width:180px;">
+      <option value="">كل المصادر</option>
+      ${sourceOptions}
+    </select>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-inner">
+      <table id="leads-table">
+        <thead>
+          <tr>
+            <th>الرقم</th>
+            <th>الاسم</th>
+            <th>الهاتف</th>
+            <th>المصدر</th>
+            <th>الحملة</th>
+            <th>الإجراء</th>
+            <th>تاريخ المتابعة</th>
+            <th>الحالة</th>
+            <th>إجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="leads-tbody"></tbody>
+      </table>
+      <div id="leads-empty" class="table-empty" style="display:none;">
+        <i class="fa fa-inbox"></i><p>لا توجد سجلات مطابقة.</p>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+  setTimeout(() => _renderLeadsRows(_leadsFiltered), 0);
+  return html;
+}
+
+function _renderLeadsRows(data) {
+  const tbody = document.getElementById('leads-tbody');
+  const empty = document.getElementById('leads-empty');
+  if (!tbody || !empty) return;
+  if (!data.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = data.map(l => {
+    const camp = _campaigns.find(c => c.CampaignID === l.CampaignID);
+    const campName = camp ? (camp.AdSource || camp.CampaignID) : (l.CampaignID || '—');
+    const actionMap = { Call:'مكالمة', Email:'بريد', Meeting:'اجتماع', WhatsApp:'واتساب', 'زيارة':'زيارة' };
+    const actionLabel = actionMap[l.Action] || l.Action || '—';
+
+    const editBtn = canDo('leads', 'u')
+      ? `<button class="btn-icon btn-icon-blue"  title="تعديل"       onclick="openLeadForm('${l.LeadID}')"><i class="fa fa-edit"></i></button>`
+      : '';
+    const convertBtn = (canDo('leads','u') && l.Status === 'FUP')
+      ? `<button class="btn-icon btn-icon-brand" title="تحويل لمريض" onclick="convertLead('${l.LeadID}')"><i class="fa fa-user-plus"></i></button>`
+      : '';
+    const delBtn = canDo('leads', 'd')
+      ? `<button class="btn-icon btn-icon-red"   title="حذف"         onclick="deleteLead('${l.LeadID}')"><i class="fa fa-trash"></i></button>`
+      : '';
+
+    return `
+<tr>
+  <td class="font-mono text-muted" style="font-size:.78rem;">${l.LeadID}</td>
+  <td style="font-weight:600;">${l.Name || '—'}</td>
+  <td class="font-mono">${l.Phone || '—'}</td>
+  <td>${l.AdSource || '—'}</td>
+  <td class="truncate" style="max-width:120px;" title="${campName}">${campName}</td>
+  <td>${actionLabel}</td>
+  <td>${fmtDate(l.FollowUpDate) || '—'}</td>
+  <td>${leadStatusBadge(l.Status)}</td>
+  <td style="white-space:nowrap;">${editBtn}${convertBtn}${delBtn}</td>
+</tr>`;
+  }).join('');
+}
+
+/* ─── Filter ──────────────────────────────────────────── */
+function filterLeads() {
+  const q      = (document.getElementById('leads-search').value  || '').trim().toLowerCase();
+  const status = (document.getElementById('leads-status').value  || '');
+  const source = (document.getElementById('leads-source').value  || '');
+
+  _leadsFiltered = _leadsData.filter(l => {
+    const matchQ  = !q      || (l.Name  || '').toLowerCase().includes(q)
+                             || (l.Phone || '').toLowerCase().includes(q);
+    const matchSt = !status || l.Status   === status;
+    const matchSr = !source || l.AdSource === source;
+    return matchQ && matchSt && matchSr;
+  });
+
+  _renderLeadsRows(_leadsFiltered);
+
+  const kpiVals = document.querySelectorAll('.stat-card .value');
+  if (kpiVals.length >= 4) {
+    kpiVals[0].textContent = _leadsFiltered.length;
+    kpiVals[1].textContent = _leadsFiltered.filter(l => l.Status === 'FUP').length;
+    kpiVals[2].textContent = _leadsFiltered.filter(l => l.Status === 'RES').length;
+    kpiVals[3].textContent = _leadsFiltered.filter(l => l.Status === 'LOST').length;
+  }
+}
+
+/* ─── Open Lead Form ──────────────────────────────────── */
+async function openLeadForm(id) {
+  const isEdit = !!id;
+  const lead   = isEdit ? _leadsData.find(l => l.LeadID === id) : {};
+  if (!lead && isEdit) { toast('لم يُعثر على السجل', 'error'); return; }
+
+  const canSave = canDo('leads', isEdit ? 'u' : 'c');
+
+  const campOpts = _campaigns.map(c =>
+    `<option value="${c.CampaignID}" ${(lead.CampaignID === c.CampaignID) ? 'selected' : ''}>${c.AdSource || c.CampaignID}</option>`
+  ).join('');
+
+  const adSources = ['Facebook','Google Ads','Instagram','TikTok','Twitter','LinkedIn','مباشر','إحالة','أخرى'];
+  const srcOpts   = adSources.map(s =>
+    `<option value="${s}" ${lead.AdSource === s ? 'selected' : ''}>${s}</option>`
+  ).join('');
+
+  const actLabels = { Call:'مكالمة (Call)', Email:'بريد (Email)', Meeting:'اجتماع (Meeting)', WhatsApp:'واتساب (WhatsApp)', 'زيارة':'زيارة' };
+  const actOpts   = Object.keys(actLabels).map(a =>
+    `<option value="${a}" ${lead.Action === a ? 'selected' : ''}>${actLabels[a]}</option>`
+  ).join('');
+
+  const dis    = canSave ? '' : 'disabled';
+  const saveBtn = canSave
+    ? `<button class="btn-primary" onclick="saveLead('${id || ''}')"><i class="fa fa-save"></i> حفظ</button>`
+    : '';
+
+  const form = `
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">الاسم *</label>
+    <input class="input-field" id="lf-name"     type="text" value="${lead.Name  || ''}" placeholder="الاسم الكامل" ${dis}>
+  </div>
+  <div class="form-group">
+    <label class="form-label">الهاتف *</label>
+    <input class="input-field" id="lf-phone"    type="tel"  value="${lead.Phone || ''}" placeholder="01XXXXXXXXX" ${dis}>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">مصدر الإعلان</label>
+    <select class="input-field" id="lf-source" ${dis}>
+      <option value="">اختر المصدر</option>
+      ${srcOpts}
+    </select>
+  </div>
+  <div class="form-group">
+    <label class="form-label">الحملة الإعلانية</label>
+    <select class="input-field" id="lf-campaign" ${dis}>
+      <option value="">بدون حملة</option>
+      ${campOpts}
+    </select>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">الإجراء المقرر</label>
+    <select class="input-field" id="lf-action" ${dis}>
+      <option value="">اختر الإجراء</option>
+      ${actOpts}
+    </select>
+  </div>
+  <div class="form-group">
+    <label class="form-label">تاريخ المتابعة</label>
+    <input class="input-field" id="lf-followup" type="date" value="${lead.FollowUpDate || ''}" ${dis}>
+  </div>
+</div>
+<div class="form-group">
+  <label class="form-label">الحالة</label>
+  <select class="input-field" id="lf-status" ${dis}>
+    <option value="FUP"  ${(lead.Status === 'FUP'  || !lead.Status) ? 'selected' : ''}>متابعة (FUP)</option>
+    <option value="RES"  ${lead.Status === 'RES'   ? 'selected' : ''}>محوّل (RES)</option>
+    <option value="LOST" ${lead.Status === 'LOST'  ? 'selected' : ''}>فقدان (LOST)</option>
+  </select>
+</div>
+<div class="form-group">
+  <label class="form-label">ملاحظات</label>
+  <textarea class="input-field" id="lf-notes" rows="3" placeholder="أي ملاحظات إضافية…" ${dis}>${lead.Notes || ''}</textarea>
+</div>
+<div class="modal-footer">
+  ${saveBtn}
+  <button class="btn-secondary" onclick="closeModal()">إغلاق</button>
+</div>`;
+
+  openModal(isEdit ? `تعديل عميل محتمل — ${lead.Name || id}` : 'إضافة عميل محتمل جديد', form);
+}
+
+/* ─── Save Lead ───────────────────────────────────────── */
+async function saveLead(id) {
+  const isEdit = !!id;
+  if (!canDo('leads', isEdit ? 'u' : 'c')) { toast('لا تملك الصلاحية', 'error'); return; }
+
+  const name       = document.getElementById('lf-name').value.trim();
+  const phone      = document.getElementById('lf-phone').value.trim();
+  const adSource   = document.getElementById('lf-source').value;
+  const campaignID = document.getElementById('lf-campaign').value;
+  const action     = document.getElementById('lf-action').value;
+  const followUp   = document.getElementById('lf-followup').value;
+  const status     = document.getElementById('lf-status').value;
+  const notes      = document.getElementById('lf-notes').value.trim();
+
+  if (!name)  { toast('الاسم مطلوب',   'error'); return; }
+  if (!phone) { toast('الهاتف مطلوب',  'error'); return; }
+
+  showLoading('جارٍ الحفظ…');
+  try {
+    _leadsData = await getDB('leads') || [];
+
+    if (isEdit) {
+      const idx = _leadsData.findIndex(l => l.LeadID === id);
+      if (idx === -1) { hideLoading(); toast('السجل غير موجود', 'error'); return; }
+      _leadsData[idx] = {
+        ..._leadsData[idx],
+        Name: name, Phone: phone, AdSource: adSource,
+        CampaignID: campaignID, Action: action,
+        FollowUpDate: followUp, Status: status,
+        Notes: notes, Timestamp: nowDateTime()
+      };
+      toast('تم تحديث العميل المحتمل ✓', 'success');
+    } else {
+      const newID = await genID('L');
+      _leadsData.push({
+        LeadID: newID, PatientID: '',
+        Name: name, Phone: phone,
+        AdSource: adSource, CampaignID: campaignID,
+        SalesAgent: currentUser.EmpID,
+        Action: action, FollowUpDate: followUp,
+        Status: status || 'FUP',
+        Notes: notes,
+        Createdtime: nowDateTime(),
+        Timestamp:   nowDateTime()
+      });
+      toast('تمت إضافة العميل المحتمل ✓', 'success');
+    }
+
+    await setDB('leads', _leadsData);
+    hideLoading();
+    closeModal();
+    _leadsFiltered = [..._leadsData];
+    _renderLeadsPage();
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  }
+}
+
+/* ─── Convert Lead → Patient ──────────────────────────── */
+async function convertLead(id) {
+  if (!canDo('leads', 'u')) { toast('لا تملك الصلاحية', 'error'); return; }
+
+  const lead = _leadsData.find(l => l.LeadID === id);
+  if (!lead) { toast('لم يُعثر على السجل', 'error'); return; }
+  if (lead.Status !== 'FUP') { toast('يمكن تحويل العملاء في حالة متابعة فقط', 'warning'); return; }
+  if (!confirm(`هل تريد تحويل "${lead.Name}" إلى مريض؟`)) return;
+
+  showLoading('جارٍ التحويل…');
+  try {
+    const patients  = await getDB('patients') || [];
+    const patientID = await genID('P');
+    patients.push({
+      PatientID: patientID,
+      Name:      lead.Name,
+      Phone:     lead.Phone,
+      Gender:    '',
+      Age:       '',
+      Address:   '',
+      Status:    'نشط',
+      CreatedAt: nowDateTime(),
+      Notes:     `محوّل من عميل محتمل: ${lead.LeadID}`
+    });
+    await setDB('patients', patients);
+
+    _leadsData = await getDB('leads') || [];
+    const idx  = _leadsData.findIndex(l => l.LeadID === id);
+    if (idx !== -1) {
+      _leadsData[idx].Status    = 'RES';
+      _leadsData[idx].PatientID = patientID;
+      _leadsData[idx].Timestamp = nowDateTime();
+      await setDB('leads', _leadsData);
+    }
+
+    await addNotif(
+      'SALES_SUP',
+      currentUser.EmpID,
+      `تم تحويل العميل المحتمل "${lead.Name}" إلى مريض بواسطة ${currentUser.Name}`,
+      'leads', id
+    );
+
+    await refreshCache();
+    hideLoading();
+    _leadsFiltered = [..._leadsData];
+    _renderLeadsPage();
+    toast(`تم تحويل "${lead.Name}" إلى مريض بنجاح ✓`, 'success');
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء التحويل', 'error');
+  }
+}
+
+/* ─── Delete Lead ─────────────────────────────────────── */
+async function deleteLead(id) {
+  if (!canDo('leads', 'd')) { toast('لا تملك صلاحية الحذف', 'error'); return; }
+  const lead = _leadsData.find(l => l.LeadID === id);
+  if (!confirm(`هل تريد حذف العميل المحتمل "${lead ? lead.Name : id}" نهائيًا؟`)) return;
+
+  showLoading('جارٍ الحذف…');
+  try {
+    _leadsData = _leadsData.filter(l => l.LeadID !== id);
+    await setDB('leads', _leadsData);
+    hideLoading();
+    _leadsFiltered = [..._leadsData];
+    _renderLeadsPage();
+    toast('تم الحذف بنجاح', 'success');
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء الحذف', 'error');
+  }
+}
+</script>

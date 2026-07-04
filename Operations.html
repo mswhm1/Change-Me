@@ -1,0 +1,625 @@
+﻿<script>
+/* ============================================================
+   Operations.html — Hair Transplant Operations Management
+   HairCare Pro ERP
+   ============================================================ */
+
+let _opsAll      = [];
+let _opsFiltered = [];
+let _opsVisits   = [];   // cached visits for dropdown
+
+// ── Entry Point ───────────────────────────────────────────────
+async function initPage() {
+  return await renderOperations();
+}
+
+// ── Render Table ──────────────────────────────────────────────
+async function renderOperations() {
+  showLoading('جاري تحميل العمليات...');
+  try {
+    await refreshCache();
+    _opsAll      = (await getDB('operations')) || [];
+    _opsFiltered = [..._opsAll];
+    _opsVisits   = (await getDB('visits'))     || [];
+  } catch (e) {
+    console.error(e);
+    hideLoading();
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>فشل تحميل العمليات</p></div>`;
+  } finally {
+    hideLoading();
+  }
+
+  const canCreate = canDo('operations', 'c');
+  const canEdit   = canDo('operations', 'u');
+  const canDel    = canDo('operations', 'd');
+  const canRead   = canDo('operations', 'r');
+
+  if (!canRead) {
+    return `<div class="perm-denied"><i class="fa fa-lock fa-3x mb-3"></i><p>ليس لديك صلاحية عرض العمليات</p></div>`;
+  }
+
+  const total      = _opsAll.length;
+  const scheduled  = _opsAll.filter(o => o.Status === 'مجدولة').length;
+  const ongoing    = _opsAll.filter(o => o.Status === 'جارية').length;
+  const completed  = _opsAll.filter(o => o.Status === 'مكتملة').length;
+
+  const stats = `
+    <div class="grid-4 mb-4">
+      ${statCard('fa-scalpel-line',  'إجمالي العمليات',  total,     'عملية',    '#f0f4ff', '#4361ee')}
+      ${statCard('fa-clock',         'مجدولة',            scheduled, 'عملية',    '#fff7f0', '#fb8500')}
+      ${statCard('fa-spinner',       'جارية',              ongoing,   'عملية',    '#f0fff9', '#06d6a0')}
+      ${statCard('fa-circle-check',  'مكتملة',            completed, 'عملية',    '#fdf0ff', '#9b5de5')}
+    </div>`;
+
+  const toolbar = `
+    <div class="section-header mb-3">
+      <h2 class="text-brand"><i class="fa fa-scalpel-line me-2"></i>إدارة العمليات</h2>
+      ${canCreate ? `<button class="btn-primary" onclick="openOpForm()"><i class="fa fa-plus me-1"></i>إضافة عملية</button>` : ''}
+    </div>
+    <div class="filter-bar mb-3">
+      <input id="op-search" class="input-field" placeholder="بحث بالمريض أو رقم العملية..." oninput="filterOps()" style="max-width:320px;">
+      <select id="op-filter-status" class="input-field" onchange="filterOps()" style="max-width:180px;">
+        <option value="">جميع الحالات</option>
+        <option value="مجدولة">مجدولة</option>
+        <option value="جارية">جارية</option>
+        <option value="مكتملة">مكتملة</option>
+        <option value="ملغية">ملغية</option>
+      </select>
+    </div>`;
+
+  const rows = _opsFiltered.length === 0
+    ? `<div class="table-empty"><i class="fa fa-calendar-xmark fa-2x mb-2"></i><p>لا توجد عمليات</p></div>`
+    : `<div class="table-wrap"><div class="table-inner"><table>
+        <thead><tr>
+          <th>الرقم</th><th>المريض</th><th>تاريخ العملية</th>
+          <th>الغرفة</th><th>عدد البصيلات</th><th>الحالة</th><th>إجراءات</th>
+        </tr></thead>
+        <tbody>${_opsFiltered.map(o => renderOpRow(o, canEdit, canDel)).join('')}</tbody>
+      </table></div></div>`;
+
+  return `<div class="fade-in">${stats}${toolbar}<div id="ops-table-zone">${rows}</div></div>`;
+}
+
+function renderOpRow(o, canEdit, canDel) {
+  return `
+    <tr>
+      <td><span class="font-mono text-muted" style="font-size:12px;">${o.OperationID}</span></td>
+      <td><strong>${o.PatientName || getPatientName(o.PatientID) || '—'}</strong></td>
+      <td>${fmtDate(o.OperationDate)}</td>
+      <td>${o.RoomNum || '—'}</td>
+      <td>${o.GraftsCount ? (Number(o.GraftsCount).toLocaleString('ar-EG') + ' بصيلة') : '—'}</td>
+      <td>${opStatusBadge(o.Status)}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn-icon btn-icon-blue"  title="تفاصيل العملية" onclick="openOpDetail('${o.OperationID}')"><i class="fa fa-microscope"></i></button>
+          ${canEdit ? `<button class="btn-icon btn-icon-brand" title="تعديل" onclick="openOpForm('${o.OperationID}')"><i class="fa fa-edit"></i></button>` : ''}
+          ${canDel  ? `<button class="btn-icon btn-icon-red"   title="حذف"   onclick="deleteOp('${o.OperationID}')"><i class="fa fa-trash"></i></button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+}
+
+// ── Filter ────────────────────────────────────────────────────
+function filterOps() {
+  const q      = (document.getElementById('op-search')?.value || '').trim().toLowerCase();
+  const status = (document.getElementById('op-filter-status')?.value || '');
+
+  _opsFiltered = _opsAll.filter(o => {
+    const matchStatus = !status || o.Status === status;
+    if (!q) return matchStatus;
+    const hay = [
+      o.OperationID, o.PatientName,
+      getPatientName(o.PatientID), o.RoomNum, o.OperationDate
+    ].filter(Boolean).join(' ').toLowerCase();
+    return matchStatus && hay.includes(q);
+  });
+
+  const canEdit = canDo('operations', 'u');
+  const canDel  = canDo('operations', 'd');
+  const zone = document.getElementById('ops-table-zone');
+  if (!zone) return;
+
+  if (_opsFiltered.length === 0) {
+    zone.innerHTML = `<div class="table-empty"><i class="fa fa-calendar-xmark fa-2x mb-2"></i><p>لا توجد نتائج</p></div>`;
+  } else {
+    zone.innerHTML = `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr>
+        <th>الرقم</th><th>المريض</th><th>تاريخ العملية</th>
+        <th>الغرفة</th><th>عدد البصيلات</th><th>الحالة</th><th>إجراءات</th>
+      </tr></thead>
+      <tbody>${_opsFiltered.map(o => renderOpRow(o, canEdit, canDel)).join('')}</tbody>
+    </table></div></div>`;
+  }
+}
+
+// ── Visit Options ─────────────────────────────────────────────
+function buildVisitOptions(selectedID = '') {
+  return _opsVisits
+    .filter(v => v.Status !== 'ملغي')
+    .map(v => {
+      const pName = v.PatientName || getPatientName(v.PatientID) || v.PatientID;
+      return `<option value="${v.VisitID}" data-patient="${v.PatientID}" data-patname="${pName}" ${v.VisitID === selectedID ? 'selected' : ''}>${v.VisitID} — ${pName} — ${fmtDate(v.BookingDate)}</option>`;
+    })
+    .join('');
+}
+
+// ── Open Operation Form ───────────────────────────────────────
+function openOpForm(id = null) {
+  const op      = id ? _opsAll.find(o => o.OperationID === id) : null;
+  const canSave = canDo('operations', id ? 'u' : 'c');
+  const visitOpts = buildVisitOptions(op?.VisitID || '');
+
+  const pNameVal  = op ? (op.PatientName || getPatientName(op.PatientID) || '') : '';
+
+  const form = `
+    <form id="op-form" onsubmit="return false;">
+      <div class="form-group mb-3">
+        <label class="form-label">الزيارة المرتبطة <span class="text-danger">*</span></label>
+        <select id="of-visit" class="input-field" onchange="autofillOp()" required>
+          <option value="">— اختر الزيارة —</option>${visitOpts}
+        </select>
+      </div>
+      <div class="form-group mb-3">
+        <label class="form-label">المريض</label>
+        <input id="of-patient-name" type="text" class="input-field" value="${pNameVal}" placeholder="سيتم التعبئة تلقائياً" readonly style="background:#f5f5f5;">
+      </div>
+      <div class="grid-2 mb-3">
+        <div class="form-group">
+          <label class="form-label">تاريخ العملية <span class="text-danger">*</span></label>
+          <input id="of-date" type="date" class="input-field" value="${op?.OperationDate || nowDate()}" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">رقم الغرفة</label>
+          <input id="of-room" type="text" class="input-field" value="${op?.RoomNum || ''}" placeholder="مثل: 101">
+        </div>
+        <div class="form-group">
+          <label class="form-label">عدد البصيلات المزروعة</label>
+          <input id="of-grafts" type="number" min="0" class="input-field" value="${op?.GraftsCount || ''}" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">الحالة</label>
+          <select id="of-status" class="input-field">
+            <option value="مجدولة"  ${(!op || op.Status === 'مجدولة')  ? 'selected' : ''}>مجدولة</option>
+            <option value="جارية"   ${op?.Status === 'جارية'   ? 'selected' : ''}>جارية</option>
+            <option value="مكتملة" ${op?.Status === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
+            <option value="ملغية"   ${op?.Status === 'ملغية'   ? 'selected' : ''}>ملغية</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group mb-3">
+        <label class="form-label">ملاحظات</label>
+        <textarea id="of-notes" class="input-field" rows="3" placeholder="أي ملاحظات إضافية...">${op?.Notes || ''}</textarea>
+      </div>
+
+      ${canSave ? `
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="closeModal()">إلغاء</button>
+        <button type="button" class="btn-primary" onclick="saveOp('${id || ''}')">
+          <i class="fa fa-save me-1"></i>${id ? 'حفظ التعديلات' : 'إضافة العملية'}
+        </button>
+      </div>` : `
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="closeModal()">إغلاق</button>
+        <div class="warning-box" style="padding:8px 14px;border-radius:8px;"><i class="fa fa-lock me-1"></i>ليس لديك صلاحية الحفظ</div>
+      </div>`}
+    </form>`;
+
+  openModal(id ? 'تعديل بيانات العملية' : 'إضافة عملية جديدة', form, 'wide');
+}
+
+// ── Autofill patient when visit is selected ───────────────────
+function autofillOp() {
+  const sel = document.getElementById('of-visit');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  const pName = opt?.getAttribute('data-patname') || '';
+  const nameEl = document.getElementById('of-patient-name');
+  if (nameEl) nameEl.value = pName;
+}
+
+// ── Save Operation ────────────────────────────────────────────
+async function saveOp(id) {
+  const visitID  = document.getElementById('of-visit')?.value?.trim();
+  const opDate   = document.getElementById('of-date')?.value?.trim();
+  const roomNum  = document.getElementById('of-room')?.value?.trim();
+  const grafts   = document.getElementById('of-grafts')?.value?.trim();
+  const status   = document.getElementById('of-status')?.value?.trim();
+  const notes    = document.getElementById('of-notes')?.value?.trim();
+
+  if (!visitID) { toast('الرجاء اختيار الزيارة', 'error');        return; }
+  if (!opDate)  { toast('الرجاء تحديد تاريخ العملية', 'error');   return; }
+
+  showLoading('جاري الحفظ...');
+  try {
+    const visit   = _opsVisits.find(v => v.VisitID === visitID);
+    const pName   = visit?.PatientName || getPatientName(visit?.PatientID) || '';
+    const pID     = visit?.PatientID || '';
+    const all     = (await getDB('operations')) || [];
+
+    if (id) {
+      const idx = all.findIndex(o => o.OperationID === id);
+      if (idx === -1) { toast('العملية غير موجودة', 'error'); return; }
+      all[idx] = {
+        ...all[idx],
+        VisitID: visitID, PatientID: pID, PatientName: pName,
+        OperationDate: opDate, RoomNum: roomNum,
+        GraftsCount: grafts ? Number(grafts) : '',
+        Status: status, Notes: notes
+      };
+    } else {
+      const newID = await genID('OP');
+      const newOp = {
+        OperationID: newID, VisitID: visitID,
+        PatientID: pID, PatientName: pName,
+        OperationDate: opDate, RoomNum: roomNum,
+        StartPhoto: '', PunchStart: '', PunchEnd: '',
+        PunchType: '', PunchSize: '', PunchPhoto: '',
+        GraftsCount: grafts ? Number(grafts) : '',
+        HLPhoto: '', SlitStart: '', SlitEnd: '',
+        SlitType: '', SlitSize: '', SlitPhoto: '',
+        ImpStart: '', ImpEnd: '', ImpType: '', EndPhoto: '',
+        Status: status || 'مجدولة', Notes: notes
+      };
+      all.push(newOp);
+
+      // Notify DOC_SUP and NRS_SUP
+      const msg = `تم جدولة عملية زراعة شعر جديدة للمريض ${pName} بتاريخ ${fmtDate(opDate)}`;
+      await addNotif('DOC_SUP', currentUser.EmpID, msg, 'operations', newID);
+      await addNotif('NRS_SUP', currentUser.EmpID, msg, 'operations', newID);
+    }
+
+    await setDB('operations', all);
+    toast(id ? 'تم تحديث العملية بنجاح' : 'تم إضافة العملية بنجاح', 'success');
+    closeModal();
+
+    // Refresh local cache
+    _opsAll      = all;
+    _opsFiltered = [...all];
+    await navigateTo('operations');
+  } catch (e) {
+    console.error(e);
+    toast('فشل حفظ العملية', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Delete Operation ──────────────────────────────────────────
+async function deleteOp(id) {
+  if (!canDo('operations', 'd')) { toast('ليس لديك صلاحية الحذف', 'error'); return; }
+  if (!confirm('هل أنت متأكد من حذف هذه العملية؟ سيتم حذف جميع مراحل العملية المرتبطة بها.')) return;
+  showLoading('جاري الحذف...');
+  try {
+    let ops  = (await getDB('operations'))  || [];
+    let tl   = (await getDB('optimeline'))  || [];
+    ops = ops.filter(o => o.OperationID !== id);
+    tl  = tl.filter(t => t.OperationID  !== id);
+    await setDB('operations',  ops);
+    await setDB('optimeline',  tl);
+    _opsAll      = ops;
+    _opsFiltered = [...ops];
+    toast('تم حذف العملية بنجاح', 'success');
+    await navigateTo('operations');
+  } catch (e) {
+    console.error(e);
+    toast('فشل حذف العملية', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Operation Detail Modal ────────────────────────────────────
+async function openOpDetail(id) {
+  showLoading('جاري تحميل تفاصيل العملية...');
+  try {
+    const op = _opsAll.find(o => o.OperationID === id);
+    if (!op) { toast('العملية غير موجودة', 'error'); return; }
+
+    const tl        = (await getDB('optimeline')) || [];
+    const opTL      = tl.filter(t => t.OperationID === id);
+    const canUpdate = canDo('operations', 'u');
+    const pName     = op.PatientName || getPatientName(op.PatientID) || '—';
+
+    const stages = [
+      {
+        key:   'punch',
+        label: 'الخدش (Punch Extraction)',
+        icon:  'fa-circle-dot',
+        color: '#4361ee',
+        bg:    '#f0f4ff',
+        fields: [
+          { id: 'PunchStart', label: 'وقت البدء',    type: 'time' },
+          { id: 'PunchEnd',   label: 'وقت الانتهاء', type: 'time' },
+          { id: 'PunchType',  label: 'نوع الخدش',    type: 'text' },
+          { id: 'PunchSize',  label: 'حجم الإبرة',   type: 'text' },
+          { id: 'PunchPhoto', label: 'رابط الصورة',  type: 'text' }
+        ]
+      },
+      {
+        key:   'slit',
+        label: 'الشق (Slit Making)',
+        icon:  'fa-cut',
+        color: '#fb8500',
+        bg:    '#fff7f0',
+        fields: [
+          { id: 'SlitStart', label: 'وقت البدء',    type: 'time' },
+          { id: 'SlitEnd',   label: 'وقت الانتهاء', type: 'time' },
+          { id: 'SlitType',  label: 'نوع الشق',     type: 'text' },
+          { id: 'SlitSize',  label: 'حجم الشق',     type: 'text' },
+          { id: 'SlitPhoto', label: 'رابط الصورة',  type: 'text' }
+        ]
+      },
+      {
+        key:   'imp',
+        label: 'الزرع (Implantation)',
+        icon:  'fa-syringe',
+        color: '#06d6a0',
+        bg:    '#f0fff9',
+        fields: [
+          { id: 'ImpStart', label: 'وقت البدء',    type: 'time' },
+          { id: 'ImpEnd',   label: 'وقت الانتهاء', type: 'time' },
+          { id: 'ImpType',  label: 'تقنية الزرع',  type: 'text' },
+          { id: 'EndPhoto', label: 'رابط الصورة النهائية', type: 'text' }
+        ]
+      }
+    ];
+
+    const stageHTML = stages.map(s => renderStageCard(op, s, opTL, canUpdate)).join('');
+
+    const generalFields = `
+      <div class="info-box mb-3" style="padding:10px 14px;">
+        <strong><i class="fa fa-image me-1"></i>الصور العامة</strong>
+      </div>
+      <div class="grid-2 mb-3">
+        <div class="form-group">
+          <label class="form-label">صورة البداية</label>
+          <input type="text" class="input-field" value="${op.StartPhoto || ''}"
+            onchange="updateOpField(this)" data-opid="${id}" data-field="StartPhoto"
+            placeholder="رابط صورة البداية" ${canUpdate ? '' : 'readonly'}>
+        </div>
+        <div class="form-group">
+          <label class="form-label">صورة خط الشعر</label>
+          <input type="text" class="input-field" value="${op.HLPhoto || ''}"
+            onchange="updateOpField(this)" data-opid="${id}" data-field="HLPhoto"
+            placeholder="رابط صورة خط الشعر" ${canUpdate ? '' : 'readonly'}>
+        </div>
+      </div>`;
+
+    const header = `
+      <div style="display:flex;align-items:center;gap:16px;padding:16px;background:linear-gradient(135deg,#4361ee15,#06d6a010);border-radius:12px;margin-bottom:20px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:#4361ee;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="fa fa-scalpel-line fa-xl" style="color:#fff;"></i>
+        </div>
+        <div style="flex:1;">
+          <h3 style="margin:0;color:#4361ee;">${pName}</h3>
+          <div class="text-muted" style="font-size:13px;margin-top:4px;">
+            <i class="fa fa-calendar me-1"></i>${fmtDate(op.OperationDate)}
+            &nbsp;|&nbsp;
+            <i class="fa fa-door-open me-1"></i>غرفة: ${op.RoomNum || '—'}
+            &nbsp;|&nbsp;
+            <i class="fa fa-seedling me-1"></i>${op.GraftsCount ? Number(op.GraftsCount).toLocaleString('ar-EG') + ' بصيلة' : '—'}
+          </div>
+          <div style="margin-top:6px;">${opStatusBadge(op.Status)}</div>
+        </div>
+      </div>`;
+
+    const notesSection = `
+      <div class="divider my-3"></div>
+      <div class="form-group mb-3">
+        <label class="form-label">ملاحظات العملية</label>
+        <textarea class="input-field" rows="3" onchange="updateOpField(this)" data-opid="${id}" data-field="Notes"
+          placeholder="ملاحظات..." ${canUpdate ? '' : 'readonly'}>${op.Notes || ''}</textarea>
+      </div>`;
+
+    const footer = `
+      <div class="modal-footer">
+        ${canUpdate ? `<button class="btn-primary" onclick="openOpForm('${id}');"><i class="fa fa-edit me-1"></i>تعديل البيانات الأساسية</button>` : ''}
+        <button class="btn-secondary" onclick="closeModal()">إغلاق</button>
+      </div>`;
+
+    openModal('تفاصيل العملية — ' + pName,
+      `<div>${header}${generalFields}${stageHTML}${notesSection}${footer}</div>`, 'wide');
+  } catch (e) {
+    console.error(e);
+    toast('فشل تحميل التفاصيل', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Render Single Stage Card ──────────────────────────────────
+function renderStageCard(op, stage, opTL, canUpdate) {
+  const tlEntry = opTL.find(t => t.Stage === stage.key);
+  const empName = tlEntry ? (getEmpName(tlEntry.EmpID) || tlEntry.EmpID || '') : '';
+
+  let stageStatus = 'not-started';
+  let statusLabel = 'لم تبدأ بعد';
+  let statusColor = '#aaa';
+  let statusIcon  = 'fa-clock';
+
+  if (tlEntry) {
+    if (tlEntry.Status === 'مكتملة') {
+      stageStatus = 'done';
+      statusLabel = 'مكتملة';
+      statusColor = '#06d6a0';
+      statusIcon  = 'fa-circle-check';
+    } else if (tlEntry.Status === 'جارية') {
+      stageStatus = 'active';
+      statusLabel = 'جارية الآن';
+      statusColor = '#fb8500';
+      statusIcon  = 'fa-spinner fa-spin';
+    }
+  }
+
+  const fieldInputs = stage.fields.map(f => {
+    const val = op[f.id] || '';
+    const onchange = canUpdate ? `onchange="updateOpField(this)" data-opid="${op.OperationID}" data-field="${f.id}"` : 'readonly';
+    return `<div class="form-group">
+      <label class="form-label">${f.label}</label>
+      <input type="${f.type}" class="input-field" value="${val}" ${onchange} placeholder="${f.label}" ${canUpdate ? '' : 'readonly'}>
+    </div>`;
+  }).join('');
+
+  const timeline = tlEntry ? `
+    <div style="margin-top:12px;padding:10px;background:#f8f9ff;border-radius:8px;font-size:13px;">
+      <i class="fa fa-user me-1 text-brand"></i><strong>${empName || '—'}</strong>
+      ${tlEntry.Start ? `&nbsp;|&nbsp;<i class="fa fa-play me-1"></i>بدأ: ${tlEntry.Start}` : ''}
+      ${tlEntry.End   ? `&nbsp;|&nbsp;<i class="fa fa-stop me-1"></i>انتهى: ${tlEntry.End}` : ''}
+      ${tlEntry.Count ? `&nbsp;|&nbsp;<i class="fa fa-hashtag me-1"></i>${tlEntry.Count}` : ''}
+    </div>` : '';
+
+  const buttons = canUpdate ? `
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+      ${stageStatus === 'not-started' ? `
+        <button class="btn-primary" style="font-size:13px;" onclick="updateOpStage('${op.OperationID}','${stage.key}')">
+          <i class="fa fa-play me-1"></i>بدء المرحلة
+        </button>` : ''}
+      ${stageStatus === 'active' ? `
+        <button class="btn-primary" style="background:#06d6a0;font-size:13px;" onclick="completeOpStage('${op.OperationID}','${stage.key}')">
+          <i class="fa fa-check me-1"></i>إتمام المرحلة
+        </button>` : ''}
+      ${stageStatus === 'done' ? `
+        <span class="badge badge-green"><i class="fa fa-circle-check me-1"></i>مكتملة</span>` : ''}
+    </div>` : '';
+
+  return `
+    <div class="stage-card mb-4" style="border:2px solid ${stage.color}25;border-radius:14px;overflow:hidden;">
+      <div style="background:${stage.bg};padding:14px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid ${stage.color}20;">
+        <div style="width:40px;height:40px;border-radius:50%;background:${stage.color};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="fa ${stage.icon}" style="color:#fff;"></i>
+        </div>
+        <div style="flex:1;">
+          <strong style="color:${stage.color};font-size:15px;">${stage.label}</strong>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:${statusColor};">
+          <i class="fa ${statusIcon}"></i> ${statusLabel}
+        </div>
+      </div>
+      <div style="padding:16px;">
+        <div class="grid-2">${fieldInputs}</div>
+        ${timeline}
+        ${buttons}
+      </div>
+    </div>`;
+}
+
+// ── Start Stage ───────────────────────────────────────────────
+async function updateOpStage(opId, stage) {
+  showLoading('جاري بدء المرحلة...');
+  try {
+    const now     = nowDateTime();
+    const nowTime = now.split(' ')[1] || now;
+
+    // Update operation fields
+    const startField = stage === 'punch' ? 'PunchStart' : stage === 'slit' ? 'SlitStart' : 'ImpStart';
+    let ops = (await getDB('operations')) || [];
+    const idx = ops.findIndex(o => o.OperationID === opId);
+    if (idx === -1) { toast('العملية غير موجودة', 'error'); return; }
+    ops[idx][startField] = nowTime;
+    if (ops[idx].Status === 'مجدولة') ops[idx].Status = 'جارية';
+    await setDB('operations', ops);
+
+    // Update / create OPTimeline entry
+    let tl = (await getDB('optimeline')) || [];
+    const tlIdx = tl.findIndex(t => t.OperationID === opId && t.Stage === stage);
+    const entry = {
+      OperationID: opId,
+      EmpID: currentUser.EmpID,
+      Stage: stage,
+      Start: nowTime,
+      End: '',
+      Count: '',
+      Status: 'جارية'
+    };
+    if (tlIdx === -1) tl.push(entry);
+    else tl[tlIdx] = { ...tl[tlIdx], ...entry };
+    await setDB('optimeline', tl);
+
+    // Refresh local ops cache
+    _opsAll = ops;
+    _opsFiltered = _opsFiltered.map(o => o.OperationID === opId ? ops[idx] : o);
+
+    toast('تم بدء المرحلة بنجاح', 'success');
+    closeModal();
+    await openOpDetail(opId);
+  } catch (e) {
+    console.error(e);
+    toast('فشل بدء المرحلة', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Complete Stage ────────────────────────────────────────────
+async function completeOpStage(opId, stage) {
+  showLoading('جاري إتمام المرحلة...');
+  try {
+    const now     = nowDateTime();
+    const nowTime = now.split(' ')[1] || now;
+
+    const endField = stage === 'punch' ? 'PunchEnd' : stage === 'slit' ? 'SlitEnd' : 'ImpEnd';
+    let ops = (await getDB('operations')) || [];
+    const idx = ops.findIndex(o => o.OperationID === opId);
+    if (idx === -1) { toast('العملية غير موجودة', 'error'); return; }
+    ops[idx][endField] = nowTime;
+
+    // If implantation completed → set operation to مكتملة
+    if (stage === 'imp') {
+      ops[idx].Status = 'مكتملة';
+      await addNotif('CS_SUP', currentUser.EmpID, `اكتملت عملية المريض ${ops[idx].PatientName || getPatientName(ops[idx].PatientID)} ويحتاج متابعة خدمة العملاء`, 'operations', opId);
+      toast('تم إتمام العملية بالكامل!', 'success');
+    }
+    await setDB('operations', ops);
+
+    // Update OPTimeline
+    let tl = (await getDB('optimeline')) || [];
+    const tlIdx = tl.findIndex(t => t.OperationID === opId && t.Stage === stage);
+    if (tlIdx !== -1) {
+      tl[tlIdx].End    = nowTime;
+      tl[tlIdx].Status = 'مكتملة';
+    } else {
+      tl.push({
+        OperationID: opId, EmpID: currentUser.EmpID,
+        Stage: stage, Start: '', End: nowTime, Count: '', Status: 'مكتملة'
+      });
+    }
+    await setDB('optimeline', tl);
+
+    // Refresh local ops cache
+    _opsAll = ops;
+    _opsFiltered = _opsFiltered.map(o => o.OperationID === opId ? ops[idx] : o);
+
+    if (stage !== 'imp') toast('تم إتمام المرحلة بنجاح', 'success');
+    closeModal();
+    await openOpDetail(opId);
+  } catch (e) {
+    console.error(e);
+    toast('فشل إتمام المرحلة', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── Inline Field Update (auto-save) ──────────────────────────
+async function updateOpField(el) {
+  const opId = el.getAttribute('data-opid');
+  const field = el.getAttribute('data-field');
+  if (!opId || !field) return;
+  try {
+    let ops = (await getDB('operations')) || [];
+    const idx = ops.findIndex(o => o.OperationID === opId);
+    if (idx === -1) return;
+    ops[idx][field] = el.value;
+    await setDB('operations', ops);
+
+    // keep local cache in sync
+    const localIdx = _opsAll.findIndex(o => o.OperationID === opId);
+    if (localIdx !== -1) _opsAll[localIdx][field] = el.value;
+
+    toast('تم الحفظ', 'success');
+  } catch (e) {
+    console.error(e);
+    toast('فشل الحفظ التلقائي', 'error');
+  }
+}
+</script>

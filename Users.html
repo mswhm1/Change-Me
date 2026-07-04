@@ -1,0 +1,393 @@
+﻿<script>
+/* ============================================================
+   Users.html — HairCare Pro ERP
+   HR / Users Management Module
+   ============================================================ */
+
+let _usersAll = [];
+let _usersFiltered = [];
+let _uSearch = '';
+let _uDept = '';
+let _uRole = '';
+
+const ROLE_NAMES_U = {
+  ADM_SUP: 'مدير النظام', DOC_SUP: 'طبيب', NRS_SUP: 'تمريض',
+  HR_SUP: 'موارد بشرية', MARKET_SUP: 'تسويق', SALES_SUP: 'مبيعات',
+  ACC_SUP: 'محاسبة', REC_SUP: 'استقبال', CS_SUP: 'خدمة عملاء'
+};
+
+const DEPT_OPTIONS = ['الإدارة', 'الأطباء', 'التمريض', 'الموارد البشرية', 'التسويق', 'المبيعات', 'المحاسبة', 'الاستقبال', 'خدمة العملاء'];
+
+const ROLE_BADGE_COLOR = {
+  ADM_SUP: 'badge-purple', DOC_SUP: 'badge-blue', NRS_SUP: 'badge-cyan',
+  HR_SUP: 'badge-orange', MARKET_SUP: 'badge-green', SALES_SUP: 'badge-brand',
+  ACC_SUP: 'badge-yellow', REC_SUP: 'badge-gray', CS_SUP: 'badge-red'
+};
+
+// ── RENDER ───────────────────────────────────────────────────
+async function renderUsers() {
+  if (!canDo('users', 'r')) {
+    return '<div class="perm-denied"><i class="fa fa-lock"></i><p>ليس لديك صلاحية لعرض المستخدمين</p></div>';
+  }
+  showLoading('جاري تحميل المستخدمين…');
+  try {
+    const users = await getDB('users') || [];
+    _usersAll = users;
+    _usersFiltered = [..._usersAll];
+
+    const total    = _usersAll.length;
+    const active   = _usersAll.filter(function(u){ return u.Status === 'active'; }).length;
+    const inactive = _usersAll.filter(function(u){ return u.Status !== 'active'; }).length;
+
+    // Department summary
+    const deptMap = {};
+    _usersAll.forEach(function(u) {
+      const d = u.Department || 'غير محدد';
+      deptMap[d] = (deptMap[d] || 0) + 1;
+    });
+    const deptSummary = Object.keys(deptMap).slice(0, 4).map(function(d) {
+      return '<span class="badge badge-blue" style="margin:2px">' + d + ': ' + deptMap[d] + '</span>';
+    }).join('');
+
+    const kpis =
+      '<div class="grid-4" style="margin-bottom:22px">' +
+        statCard('fa-users', 'إجمالي الموظفين', total, 'مستخدم مسجل', '#f0f4ff', '#4361ee') +
+        statCard('fa-user-check', 'نشطون', active, 'موظف نشط', '#f0fff4', '#2dc653') +
+        statCard('fa-user-times', 'غير نشطين', inactive, 'موظف غير نشط', '#fff5f5', '#e63946') +
+        statCard('fa-sitemap', 'الأقسام', Object.keys(deptMap).length, deptSummary, '#fffbf0', '#f4a261') +
+      '</div>';
+
+    const roleOpts = Object.keys(ROLE_NAMES_U).map(function(r) {
+      return '<option value="' + r + '" ' + (_uRole === r ? 'selected' : '') + '>' + ROLE_NAMES_U[r] + '</option>';
+    }).join('');
+
+    const deptOpts = DEPT_OPTIONS.map(function(d) {
+      return '<option value="' + d + '" ' + (_uDept === d ? 'selected' : '') + '>' + d + '</option>';
+    }).join('');
+
+    const addBtn = canDo('users', 'c')
+      ? '<button class="btn-primary" onclick="openUserForm()"><i class="fa fa-user-plus"></i> إضافة موظف</button>'
+      : '';
+
+    const filterBar =
+      '<div class="filter-bar" style="margin-bottom:16px">' +
+        '<input class="input-field" type="text" placeholder="🔍 بحث بالاسم أو اسم المستخدم…" value="' + _uSearch + '" oninput="_uSearch=this.value;filterUsers()" style="min-width:220px">' +
+        '<select class="input-field" onchange="_uDept=this.value;filterUsers()">' +
+          '<option value="">كل الأقسام</option>' + deptOpts +
+        '</select>' +
+        '<select class="input-field" onchange="_uRole=this.value;filterUsers()">' +
+          '<option value="">كل الأدوار</option>' + roleOpts +
+        '</select>' +
+        addBtn +
+      '</div>';
+
+    setTimeout(_renderUsersTable, 0);
+    return kpis + filterBar + '<div id="users-table-wrap"></div>';
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء تحميل المستخدمين', 'error');
+    return '<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>حدث خطأ أثناء تحميل المستخدمين</p></div>';
+  } finally {
+    hideLoading();
+  }
+}
+
+function filterUsers() {
+  const q = (_uSearch || '').toLowerCase();
+  _usersFiltered = _usersAll.filter(function(u) {
+    const matchQ = !q || (u.Name || '').toLowerCase().includes(q) || (u.UserName || '').toLowerCase().includes(q);
+    const matchD = !_uDept || u.Department === _uDept;
+    const matchR = !_uRole || u.Role === _uRole;
+    return matchQ && matchD && matchR;
+  });
+  _renderUsersTable();
+}
+
+function _renderUsersTable() {
+  const wrap = document.getElementById('users-table-wrap');
+  if (!wrap) return;
+  if (!_usersFiltered.length) {
+    wrap.innerHTML = '<div class="table-empty"><i class="fa fa-users-slash"></i><p>لا يوجد موظفون يطابقون البحث</p></div>';
+    return;
+  }
+  const rows = _usersFiltered.map(function(u) {
+    const statusBadge = u.Status === 'active'
+      ? '<span class="badge badge-green">نشط</span>'
+      : '<span class="badge badge-red">غير نشط</span>';
+    const roleBadge = '<span class="badge ' + (ROLE_BADGE_COLOR[u.Role] || 'badge-gray') + '">' + (ROLE_NAMES_U[u.Role] || u.Role) + '</span>';
+
+    const editBtn = canDo('users', 'u')
+      ? '<button class="btn-icon btn-icon-yellow" title="تعديل" onclick="openUserForm(\'' + u.EmpID + '\')"><i class="fa fa-edit"></i></button>'
+      : '';
+    const resetBtn = currentUser.Role === 'ADM_SUP'
+      ? '<button class="btn-icon btn-icon-blue" title="إعادة تعيين كلمة المرور" onclick="resetPassword(\'' + u.EmpID + '\')"><i class="fa fa-key"></i></button>'
+      : '';
+    const delBtn = canDo('users', 'd') && u.EmpID !== currentUser.EmpID
+      ? '<button class="btn-icon btn-icon-red" title="حذف" onclick="deleteUser(\'' + u.EmpID + '\')"><i class="fa fa-trash"></i></button>'
+      : '';
+
+    return '<tr>' +
+      '<td class="font-mono text-muted" style="font-size:12px">' + u.EmpID + '</td>' +
+      '<td style="font-weight:600">' + (u.Name || '—') + '</td>' +
+      '<td class="font-mono">' + (u.UserName || '—') + '</td>' +
+      '<td>' + roleBadge + '</td>' +
+      '<td>' + (u.Department || '—') + '</td>' +
+      '<td class="font-mono">' + (u.Phone || '—') + '</td>' +
+      '<td>' + fmtCurrency(u.Salary || 0) + '</td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td class="text-muted">' + fmtDate(u.JoinDate) + '</td>' +
+      '<td style="white-space:nowrap">' + editBtn + resetBtn + delBtn + '</td>' +
+    '</tr>';
+  }).join('');
+
+  wrap.innerHTML =
+    '<div class="table-wrap"><div class="table-inner"><table>' +
+      '<thead><tr>' +
+        '<th>الرقم الوظيفي</th><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th>' +
+        '<th>القسم</th><th>الهاتف</th><th>الراتب</th><th>الحالة</th><th>تاريخ الالتحاق</th><th>إجراءات</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div></div>';
+}
+
+// ── OPEN USER FORM ────────────────────────────────────────────
+function openUserForm(id) {
+  const user = id ? _usersAll.find(function(u){ return u.EmpID === id; }) : null;
+  const isEdit = !!user;
+  const canSave = canDo('users', isEdit ? 'u' : 'c');
+
+  const roleOpts = Object.keys(ROLE_NAMES_U).map(function(r) {
+    return '<option value="' + r + '" ' + (user && user.Role === r ? 'selected' : '') + '>' + ROLE_NAMES_U[r] + '</option>';
+  }).join('');
+
+  const deptOpts = DEPT_OPTIONS.map(function(d) {
+    return '<option value="' + d + '" ' + (user && user.Department === d ? 'selected' : '') + '>' + d + '</option>';
+  }).join('');
+
+  const toggleId = 'togglePass_' + Math.random().toString(36).substr(2, 6);
+
+  const html =
+    // Section 1: Personal Info
+    '<p class="text-muted" style="font-weight:600;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:6px"><i class="fa fa-id-card"></i> البيانات الشخصية</p>' +
+    '<div class="grid-2" style="gap:14px;margin-bottom:16px">' +
+      '<div class="form-group">' +
+        '<label class="form-label">الاسم الكامل *</label>' +
+        '<input class="input-field" id="u-name" value="' + (user ? (user.Name || '') : '') + '" placeholder="الاسم بالكامل">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الرقم القومي</label>' +
+        '<input class="input-field" id="u-nid" value="' + (user ? (user.NationalID || '') : '') + '" placeholder="الرقم القومي">' +
+      '</div>' +
+    '</div>' +
+
+    // Section 2: Account Info
+    '<p class="text-muted" style="font-weight:600;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:6px"><i class="fa fa-user-shield"></i> بيانات الحساب</p>' +
+    '<div class="grid-2" style="gap:14px;margin-bottom:16px">' +
+      '<div class="form-group">' +
+        '<label class="form-label">اسم المستخدم *</label>' +
+        '<input class="input-field" id="u-username" value="' + (user ? (user.UserName || '') : '') + '" placeholder="اسم المستخدم (للدخول)">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">كلمة المرور ' + (isEdit ? '(اتركها فارغة للإبقاء)' : '*') + '</label>' +
+        '<div style="position:relative">' +
+          '<input class="input-field" id="u-pass" type="password" placeholder="كلمة المرور" style="padding-left:40px">' +
+          '<button type="button" id="' + toggleId + '" onclick="(function(){var f=document.getElementById(\'u-pass\');f.type=f.type===\'password\'?\'text\':\'password\';})()" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#888"><i class="fa fa-eye"></i></button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    // Section 3: Role/Dept/Phone
+    '<p class="text-muted" style="font-weight:600;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:6px"><i class="fa fa-briefcase"></i> بيانات الوظيفة</p>' +
+    '<div class="grid-3" style="gap:14px;margin-bottom:16px">' +
+      '<div class="form-group">' +
+        '<label class="form-label">الدور الوظيفي *</label>' +
+        '<select class="input-field" id="u-role">' + roleOpts + '</select>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">القسم *</label>' +
+        '<select class="input-field" id="u-dept">' +
+          '<option value="">اختر القسم</option>' + deptOpts +
+        '</select>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">رقم الهاتف</label>' +
+        '<input class="input-field" id="u-phone" value="' + (user ? (user.Phone || '') : '') + '" placeholder="01xxxxxxxxx">' +
+      '</div>' +
+    '</div>' +
+
+    // Section 4: HR Info
+    '<p class="text-muted" style="font-weight:600;margin-bottom:8px;border-bottom:1px solid #eee;padding-bottom:6px"><i class="fa fa-money-bill-wave"></i> بيانات الموارد البشرية</p>' +
+    '<div class="grid-3" style="gap:14px;margin-bottom:16px">' +
+      '<div class="form-group">' +
+        '<label class="form-label">الراتب (ج)</label>' +
+        '<input class="input-field" id="u-salary" type="number" min="0" value="' + (user ? (user.Salary || 0) : 0) + '">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">تاريخ الالتحاق</label>' +
+        '<input class="input-field" id="u-joindate" type="date" value="' + (user ? (user.JoinDate || '') : nowDate()) + '">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الحالة</label>' +
+        '<select class="input-field" id="u-status">' +
+          '<option value="active" ' + (user && user.Status === 'active' ? 'selected' : '') + '>نشط</option>' +
+          '<option value="inactive" ' + (user && user.Status === 'inactive' ? 'selected' : '') + '>غير نشط</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+
+    // Notes
+    '<div class="form-group" style="margin-bottom:16px">' +
+      '<label class="form-label">ملاحظات</label>' +
+      '<textarea class="input-field" id="u-notes" rows="3">' + (user ? (user.Notes || '') : '') + '</textarea>' +
+    '</div>' +
+
+    (canSave ? '<div class="modal-footer"><button class="btn-primary" onclick="saveUser(\'' + (id || '') + '\')"><i class="fa fa-save"></i> حفظ</button></div>' : '');
+
+  openModal(isEdit ? 'تعديل بيانات: ' + user.Name : 'إضافة موظف جديد', html, 'wide');
+}
+
+// ── SAVE USER ─────────────────────────────────────────────────
+async function saveUser(id) {
+  const name     = ((document.getElementById('u-name') || {}).value || '').trim();
+  const nid      = ((document.getElementById('u-nid') || {}).value || '').trim();
+  const username = ((document.getElementById('u-username') || {}).value || '').trim();
+  const pass     = ((document.getElementById('u-pass') || {}).value || '').trim();
+  const role     = (document.getElementById('u-role') || {}).value;
+  const dept     = (document.getElementById('u-dept') || {}).value;
+  const phone    = ((document.getElementById('u-phone') || {}).value || '').trim();
+  const salary   = Number((document.getElementById('u-salary') || {}).value);
+  const joinDate = (document.getElementById('u-joindate') || {}).value;
+  const status   = (document.getElementById('u-status') || {}).value;
+  const notes    = ((document.getElementById('u-notes') || {}).value || '').trim();
+
+  if (!name) { toast('يرجى إدخال الاسم الكامل', 'error'); return; }
+  if (!username) { toast('يرجى إدخال اسم المستخدم', 'error'); return; }
+  if (!id && !pass) { toast('يرجى إدخال كلمة المرور للمستخدم الجديد', 'error'); return; }
+  if (!role) { toast('يرجى اختيار الدور الوظيفي', 'error'); return; }
+  if (!dept) { toast('يرجى اختيار القسم', 'error'); return; }
+
+  showLoading('جاري الحفظ…');
+  try {
+    let users = await getDB('users') || [];
+    const isEdit = !!id;
+
+    // Validate username uniqueness
+    const duplicate = users.find(function(u) {
+      return u.UserName === username && u.EmpID !== id;
+    });
+    if (duplicate) { toast('اسم المستخدم "' + username + '" مستخدم بالفعل', 'error'); hideLoading(); return; }
+
+    if (isEdit) {
+      const idx = users.findIndex(function(u){ return u.EmpID === id; });
+      if (idx < 0) { toast('المستخدم غير موجود', 'error'); return; }
+      const updated = Object.assign({}, users[idx], {
+        Name: name, NationalID: nid, UserName: username,
+        Role: role, Department: dept, Phone: phone,
+        Salary: salary, JoinDate: joinDate, Status: status, Notes: notes
+      });
+      if (pass) updated.Password = pass;
+      users[idx] = updated;
+    } else {
+      const empId = await genID('EMP');
+      users.push({
+        EmpID: empId, Name: name, NationalID: nid, UserName: username,
+        Password: pass, Role: role, Department: dept, Phone: phone,
+        Salary: salary, JoinDate: joinDate || nowDate(), Status: status,
+        Notes: notes
+      });
+    }
+
+    await setDB('users', users);
+    await refreshCache();
+    toast(isEdit ? 'تم تحديث بيانات الموظف بنجاح' : 'تم إضافة الموظف بنجاح', 'success');
+    closeModal();
+    await renderUsers();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── DELETE USER ───────────────────────────────────────────────
+async function deleteUser(id) {
+  if (!canDo('users', 'd')) { toast('لا تملك صلاحية الحذف', 'error'); return; }
+  if (id === currentUser.EmpID) { toast('لا يمكنك حذف حسابك الخاص', 'error'); return; }
+
+  const user = _usersAll.find(function(u){ return u.EmpID === id; });
+  if (!user) return;
+  if (!confirm('هل تريد حذف الموظف "' + user.Name + '"؟ لا يمكن التراجع عن هذا الإجراء.')) return;
+
+  showLoading('جاري الحذف…');
+  try {
+    let users = await getDB('users') || [];
+    users = users.filter(function(u){ return u.EmpID !== id; });
+    await setDB('users', users);
+    await refreshCache();
+    toast('تم حذف الموظف بنجاح', 'success');
+    await renderUsers();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء الحذف', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── RESET PASSWORD ────────────────────────────────────────────
+function resetPassword(id) {
+  if (currentUser.Role !== 'ADM_SUP') { toast('هذه الميزة للمدير فقط', 'error'); return; }
+  const user = _usersAll.find(function(u){ return u.EmpID === id; });
+  if (!user) return;
+
+  const toggleId2 = 'togglePass2_' + Math.random().toString(36).substr(2, 6);
+
+  const html =
+    '<div class="info-box" style="margin-bottom:14px">' +
+      'إعادة تعيين كلمة مرور: <b>' + user.Name + '</b>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">كلمة المرور الجديدة *</label>' +
+      '<div style="position:relative">' +
+        '<input class="input-field" id="rp-pass" type="password" placeholder="كلمة المرور الجديدة" style="padding-left:40px">' +
+        '<button type="button" id="' + toggleId2 + '" onclick="(function(){var f=document.getElementById(\'rp-pass\');f.type=f.type===\'password\'?\'text\':\'password\';})()" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#888"><i class="fa fa-eye"></i></button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">تأكيد كلمة المرور *</label>' +
+      '<input class="input-field" id="rp-pass2" type="password" placeholder="تأكيد كلمة المرور">' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="btn-primary" onclick="_doResetPassword(\'' + id + '\')"><i class="fa fa-key"></i> تغيير كلمة المرور</button>' +
+    '</div>';
+
+  openModal('إعادة تعيين كلمة المرور', html, 'narrow');
+}
+
+async function _doResetPassword(id) {
+  const pass  = ((document.getElementById('rp-pass') || {}).value || '').trim();
+  const pass2 = ((document.getElementById('rp-pass2') || {}).value || '').trim();
+
+  if (!pass) { toast('يرجى إدخال كلمة المرور الجديدة', 'error'); return; }
+  if (pass !== pass2) { toast('كلمتا المرور غير متطابقتين', 'error'); return; }
+  if (pass.length < 4) { toast('كلمة المرور يجب أن تكون 4 أحرف على الأقل', 'error'); return; }
+
+  showLoading('جاري التحديث…');
+  try {
+    let users = await getDB('users') || [];
+    const idx = users.findIndex(function(u){ return u.EmpID === id; });
+    if (idx < 0) { toast('المستخدم غير موجود', 'error'); return; }
+    users[idx] = Object.assign({}, users[idx], { Password: pass });
+    await setDB('users', users);
+    toast('تم تغيير كلمة المرور بنجاح', 'success');
+    closeModal();
+    await renderUsers();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء التحديث', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+</script>

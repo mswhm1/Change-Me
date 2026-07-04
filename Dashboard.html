@@ -1,0 +1,764 @@
+﻿<script>
+// ============================================================
+//  Dashboard.html — HairCare Pro
+//  Role-specific dashboard rendering
+// ============================================================
+
+/* ---------- Role display names (Arabic) ---------- */
+const ROLE_LABELS = {
+  ADM_SUP:    'مدير النظام',
+  DOC_SUP:    'طبيب',
+  NRS_SUP:    'ممرض / فني',
+  HR_SUP:     'موارد بشرية',
+  MARKET_SUP: 'تسويق',
+  SALES_SUP:  'مبيعات',
+  ACC_SUP:    'محاسب',
+  REC_SUP:    'استقبال',
+  CS_SUP:     'خدمة عملاء',
+};
+
+const ROLE_TASK_ACTIONS = {
+  ADM_SUP: [
+    ['users', 'fa-users-cog', 'إدارة الموظفين'],
+    ['notifications', 'fa-bell', 'الإشعارات'],
+    ['dashboard', 'fa-chart-line', 'المؤشرات']
+  ],
+  MARKET_SUP: [
+    ['marketing', 'fa-bullhorn', 'تسجيل حملة'],
+    ['leads', 'fa-user-plus', 'إضافة Lead'],
+    ['dashboard', 'fa-chart-pie', 'تحليل الأداء']
+  ],
+  SALES_SUP: [
+    ['leads', 'fa-phone', 'متابعة Lead'],
+    ['visits', 'fa-calendar-plus', 'حجز موعد'],
+    ['patients', 'fa-user-injured', 'ملف مريض']
+  ],
+  REC_SUP: [
+    ['visits', 'fa-door-open', 'تسجيل وصول'],
+    ['visits', 'fa-user-md', 'إدخال للطبيب'],
+    ['patients', 'fa-search', 'بحث مريض']
+  ],
+  DOC_SUP: [
+    ['visits', 'fa-calendar-check', 'حجوزاتي'],
+    ['medical', 'fa-file-medical', 'تسجيل Assessment'],
+    ['patientslog', 'fa-notes-medical', 'متابعات']
+  ],
+  NRS_SUP: [
+    ['operations', 'fa-bed', 'تسكين عملية'],
+    ['operations', 'fa-clipboard-list', 'تسجيل بيانات العملية'],
+    ['optimeline', 'fa-stream', 'مراحل العملية']
+  ],
+  CS_SUP: [
+    ['patientslog', 'fa-headset', 'متابعة مريض'],
+    ['patients', 'fa-user-injured', 'ملف مريض'],
+    ['notifications', 'fa-bell', 'تنبيهات']
+  ],
+  ACC_SUP: [
+    ['visits', 'fa-money-bill-wave', 'تحصيل دفعة'],
+    ['inventory', 'fa-boxes-stacked', 'المخزون'],
+    ['dashboard', 'fa-coins', 'الملخص المالي']
+  ],
+  HR_SUP: [
+    ['users', 'fa-user-plus', 'إضافة موظف'],
+    ['users', 'fa-id-badge', 'بيانات الموظفين'],
+    ['notifications', 'fa-bell', 'تنبيهات']
+  ]
+};
+
+/* ---------- Entry point ---------- */
+async function renderDashboard() {
+  showLoading('جارٍ تحميل لوحة التحكم…');
+  try {
+    const role = currentUser.Role;
+    let html = '';
+    switch (role) {
+      case 'ADM_SUP':    html = await _dashADM();    break;
+      case 'DOC_SUP':    html = await _dashDOC();    break;
+      case 'NRS_SUP':    html = await _dashNRS();    break;
+      case 'HR_SUP':     html = await _dashHR();     break;
+      case 'MARKET_SUP': html = await _dashMARKET(); break;
+      case 'SALES_SUP':  html = await _dashSALES();  break;
+      case 'ACC_SUP':    html = await _dashACC();    break;
+      case 'REC_SUP':    html = await _dashREC();    break;
+      case 'CS_SUP':     html = await _dashCS();     break;
+      default:           html = _dashDefault();      break;
+    }
+    return `<div class="fade-in">${html}</div>`;
+  } catch (e) {
+    console.error('Dashboard error:', e);
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>حدث خطأ أثناء تحميل البيانات</p></div>`;
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ============================================================
+   SHARED HELPERS
+   ============================================================ */
+
+function _welcomeBar() {
+  const roleLabel = ROLE_LABELS[currentUser.Role] || currentUser.Role;
+  const today = fmtDate(nowDate());
+  const actions = (ROLE_TASK_ACTIONS[currentUser.Role] || []).filter(a => canDo(a[0], 'r') || a[0] === 'dashboard');
+  const actionsHtml = actions.length ? `
+    <div class="task-actions">
+      ${actions.map(a => `
+        <button type="button" class="task-action" onclick="navigateTo('${a[0]}')">
+          <i class="fa ${a[1]}"></i>
+          <span>${a[2]}</span>
+        </button>
+      `).join('')}
+    </div>` : '';
+  return `
+    <div class="info-box dashboard-welcome">
+      <div>
+        <div style="font-size:1.25rem;font-weight:700;color:var(--brand);">
+          <i class="fa fa-hand-sparkles" style="margin-left:6px;"></i>
+          مرحباً، ${currentUser.Name}
+        </div>
+        <div class="text-muted" style="margin-top:4px;font-size:.9rem;">
+          <span class="badge badge-blue" style="margin-left:6px;">${roleLabel}</span>
+          <i class="fa fa-calendar-alt" style="margin-left:4px;"></i>${today}
+        </div>
+      </div>
+      <div style="font-size:2rem;opacity:.15;"><i class="fa fa-user-circle"></i></div>
+    </div>
+    ${actionsHtml}`;
+}
+
+function _sectionTitle(icon, title) {
+  return `<div class="section-header" style="margin:24px 0 12px;">
+    <h3 style="display:flex;align-items:center;gap:8px;margin:0;font-size:1.05rem;">
+      <i class="fa ${icon} text-brand"></i> ${title}
+    </h3>
+  </div>`;
+}
+
+/* ============================================================
+   ADM_SUP — Full Dashboard
+   ============================================================ */
+async function _dashADM() {
+  const [patients, visits, leads, inventory, users, operations] = await Promise.all([
+    getDB('patients'),
+    getDB('visits'),
+    getDB('leads'),
+    getDB('inventory'),
+    getDB('users'),
+    getDB('operations'),
+  ]);
+
+  const pList   = patients   || [];
+  const vList   = visits     || [];
+  const lList   = leads      || [];
+  const invList = inventory  || [];
+  const uList   = users      || [];
+  const opList  = operations || [];
+
+  const totalPatients   = pList.length;
+  const activeOps       = opList.filter(o => o.Status === 'نشط' || o.Status === 'جارية').length;
+  const totalRevenue    = vList.reduce((s, v) => s + (parseFloat(v.TotalAmount) || 0), 0);
+  const outstanding     = vList.reduce((s, v) => s + (parseFloat(v.RemainingAmount) || 0), 0);
+  const totalLeads      = lList.length;
+  const lowStock        = invList.filter(i => parseFloat(i.CurrentQty) <= parseFloat(i.MinQty)).length;
+  const totalEmployees  = uList.length;
+
+  const recentVisits = [...vList]
+    .sort((a, b) => (b.BookingDate || '').localeCompare(a.BookingDate || ''))
+    .slice(0, 10);
+
+  const leadFUP  = lList.filter(l => l.Status === 'FUP').length;
+  const leadRES  = lList.filter(l => l.Status === 'RES').length;
+  const leadLOST = lList.filter(l => l.Status === 'LOST').length;
+  const leadNEW  = lList.filter(l => l.Status === 'NEW').length;
+
+  const paidVisits    = vList.filter(v => parseFloat(v.RemainingAmount) === 0 && parseFloat(v.TotalAmount) > 0).length;
+  const activePatients= pList.filter(p => p.Status === 'نشط').length;
+  const completedOps  = opList.filter(o => o.Status === 'مكتملة').length;
+  const todayStr      = nowDate();
+  const todayVisits   = vList.filter(v => v.BookingDate === todayStr).length;
+
+  let html = _welcomeBar();
+
+  html += _sectionTitle('fa-chart-line', 'المؤشرات الرئيسية');
+  html += `<div class="grid-4">
+    ${statCard('fa-users',         'إجمالي المرضى',       totalPatients,               `${activePatients} نشط`,              '#f0fdf4','#16a34a')}
+    ${statCard('fa-procedures',    'العمليات النشطة',     activeOps,                   `${completedOps} مكتملة`,             '#eff6ff','#2563eb')}
+    ${statCard('fa-money-bill',    'إجمالي الإيرادات',   fmtCurrency(totalRevenue),   `${paidVisits} زيارة مدفوعة`,         '#fefce8','#ca8a04')}
+    ${statCard('fa-hourglass-half','المبالغ المستحقة',   fmtCurrency(outstanding),    'رصيد غير محصّل',                    '#fdf2f8','#9333ea')}
+  </div>`;
+
+  html += `<div class="grid-4" style="margin-top:16px;">
+    ${statCard('fa-funnel-dollar', 'إجمالي العملاء المحتملين', totalLeads,     `${leadFUP} متابعة`,                '#fff7ed','#ea580c')}
+    ${statCard('fa-boxes',         'مواد منخفضة المخزون',      lowStock,       'تحتاج إعادة طلب',                  '#fef2f2','#dc2626')}
+    ${statCard('fa-user-tie',      'إجمالي الموظفين',          totalEmployees, 'موظف مسجّل',                       '#f0f9ff','#0284c7')}
+    ${statCard('fa-calendar-day',  'زيارات اليوم',             todayVisits,    fmtDate(todayStr),                   '#f5f3ff','#7c3aed')}
+  </div>`;
+
+  html += _sectionTitle('fa-chart-bar', 'ملخص حالات العملاء المحتملين');
+  html += `<div class="grid-4">
+    ${statCard('fa-star',  'جديد',   leadNEW,  'عميل محتمل جديد', '#f0fdf4','#16a34a')}
+    ${statCard('fa-phone', 'متابعة', leadFUP,  'قيد المتابعة',     '#fff7ed','#ea580c')}
+    ${statCard('fa-check', 'محوّل',  leadRES,  'تم التحويل',       '#eff6ff','#2563eb')}
+    ${statCard('fa-times', 'خسارة',  leadLOST, 'عميل ضائع',        '#fef2f2','#dc2626')}
+  </div>`;
+
+  html += _sectionTitle('fa-table', 'آخر الزيارات');
+  html += `<div class="table-wrap"><div class="table-inner"><table>
+    <thead><tr>
+      <th>رقم الزيارة</th><th>المريض</th><th>الإجراء</th>
+      <th>تاريخ الحجز</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th>
+    </tr></thead>
+    <tbody>`;
+  if (recentVisits.length === 0) {
+    html += `<tr><td colspan="8" style="text-align:center;color:var(--muted);">لا توجد زيارات مسجّلة</td></tr>`;
+  } else {
+    recentVisits.forEach(v => {
+      const rem = parseFloat(v.RemainingAmount) || 0;
+      html += `<tr>
+        <td class="font-mono">${v.VisitID || '-'}</td>
+        <td>${v.PatientName || getPatientName(v.PatientID) || '-'}</td>
+        <td>${v.ProcedureName || '-'}</td>
+        <td>${fmtDate(v.BookingDate) || '-'}</td>
+        <td>${fmtCurrency(parseFloat(v.TotalAmount)||0)}</td>
+        <td>${fmtCurrency(parseFloat(v.PaidAmount)||0)}</td>
+        <td class="${rem > 0 ? 'text-danger' : ''}">${fmtCurrency(rem)}</td>
+        <td>${visitStatusBadge(v.Status)}</td>
+      </tr>`;
+    });
+  }
+  html += `</tbody></table></div></div>`;
+  return html;
+}
+
+/* ============================================================
+   DOC_SUP
+   ============================================================ */
+async function _dashDOC() {
+  const [patients, operations, medicalrecords, visits] = await Promise.all([
+    getDB('patients'),
+    getDB('operations'),
+    getDB('medicalrecords'),
+    getDB('visits'),
+  ]);
+
+  const pList  = patients       || [];
+  const opList = operations     || [];
+  const mrList = medicalrecords || [];
+  const vList  = visits         || [];
+
+  const todayStr    = nowDate();
+  const todayOps    = opList.filter(o => o.OperationDate === todayStr);
+  const pendingMR   = mrList.filter(m => !m.TreatmentPlan || m.TreatmentPlan.trim() === '').length;
+  const completedOps= opList.filter(o => o.Status === 'مكتملة').length;
+  const myVisits    = vList.filter(v => v.DoctorID === currentUser.EmpID);
+  const myPatients  = new Set(myVisits.map(v => v.PatientID)).size;
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-stethoscope', 'إحصائياتي الطبية');
+  html += `<div class="grid-4">
+    ${statCard('fa-user-injured',  'مرضاي',              myPatients,        'مريض تحت رعايتي', '#f0fdf4','#16a34a')}
+    ${statCard('fa-calendar-day',  'عمليات اليوم',       todayOps.length,   fmtDate(todayStr), '#eff6ff','#2563eb')}
+    ${statCard('fa-file-medical',  'سجلات طبية معلّقة', pendingMR,         'تحتاج مراجعة',    '#fff7ed','#ea580c')}
+    ${statCard('fa-check-circle',  'عمليات مكتملة',     completedOps,      'إجمالي منجز',     '#f0fdf4','#16a34a')}
+  </div>`;
+
+  html += _sectionTitle('fa-list-alt', 'عمليات اليوم');
+  if (todayOps.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-calendar-times"></i><p>لا توجد عمليات مجدولة اليوم</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>رقم العملية</th><th>المريض</th><th>الغرفة</th><th>الحالة</th></tr></thead>
+      <tbody>`;
+    todayOps.forEach(o => {
+      html += `<tr>
+        <td class="font-mono">${o.OperationID || '-'}</td>
+        <td>${o.PatientName || getPatientName(o.PatientID) || '-'}</td>
+        <td>${o.RoomNum || '-'}</td>
+        <td>${opStatusBadge(o.Status)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   NRS_SUP
+   ============================================================ */
+async function _dashNRS() {
+  const [operations, inventory] = await Promise.all([
+    getDB('operations'),
+    getDB('inventory'),
+  ]);
+
+  const opList   = operations || [];
+  const invList  = inventory  || [];
+  const todayStr = nowDate();
+  const todayOps = opList.filter(o => o.OperationDate === todayStr);
+
+  const statusMap = {};
+  todayOps.forEach(o => {
+    const s = o.Status || 'غير محدد';
+    statusMap[s] = (statusMap[s] || 0) + 1;
+  });
+
+  const lowStock = invList.filter(i => parseFloat(i.CurrentQty) <= parseFloat(i.MinQty));
+
+  const statusColors = {
+    'مكتملة':   ['#f0fdf4','#16a34a'],
+    'جارية':    ['#eff6ff','#2563eb'],
+    'ملغاة':    ['#fef2f2','#dc2626'],
+    'مجدولة':   ['#fefce8','#ca8a04'],
+    'غير محدد': ['#f9fafb','#6b7280'],
+  };
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-procedures', `عمليات اليوم (${todayOps.length})`);
+
+  if (Object.keys(statusMap).length === 0) {
+    html += `<div class="table-empty" style="margin-bottom:16px;"><i class="fa fa-calendar-times"></i><p>لا توجد عمليات اليوم</p></div>`;
+  } else {
+    html += `<div class="grid-4">`;
+    Object.entries(statusMap).forEach(([status, count]) => {
+      const [bg, ic] = statusColors[status] || ['#f9fafb','#6b7280'];
+      html += statCard('fa-circle', status, count, 'عملية', bg, ic);
+    });
+    html += `</div>`;
+  }
+
+  if (todayOps.length > 0) {
+    html += `<div class="table-wrap" style="margin-top:16px;"><div class="table-inner"><table>
+      <thead><tr><th>رقم العملية</th><th>المريض</th><th>الغرفة</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
+      <tbody>`;
+    todayOps.forEach(o => {
+      html += `<tr>
+        <td class="font-mono">${o.OperationID||'-'}</td>
+        <td>${o.PatientName||getPatientName(o.PatientID)||'-'}</td>
+        <td>${o.RoomNum||'-'}</td>
+        <td>${opStatusBadge(o.Status)}</td>
+        <td class="text-muted truncate" style="max-width:200px;">${o.Notes||'-'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+
+  html += _sectionTitle('fa-boxes', `مواد منخفضة المخزون (${lowStock.length})`);
+  if (lowStock.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-check-circle" style="color:#16a34a;"></i><p>جميع المواد بمستوى كافٍ</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>الصنف</th><th>الفئة</th><th>الكمية الحالية</th><th>الحد الأدنى</th><th>الوحدة</th><th>المورد</th></tr></thead>
+      <tbody>`;
+    lowStock.forEach(i => {
+      html += `<tr>
+        <td>${i.ItemName||'-'}</td>
+        <td>${i.Category||'-'}</td>
+        <td class="text-danger font-mono">${i.CurrentQty||0}</td>
+        <td class="font-mono">${i.MinQty||0}</td>
+        <td>${i.Unit||'-'}</td>
+        <td>${i.Supplier||'-'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   HR_SUP
+   ============================================================ */
+async function _dashHR() {
+  const users = await getDB('users') || [];
+  const total   = users.length;
+  const active  = users.filter(u => u.Status === 'نشط').length;
+  const inactive= users.filter(u => u.Status !== 'نشط').length;
+
+  const deptMap = {};
+  users.forEach(u => {
+    const d = u.Department || 'غير محدد';
+    deptMap[d] = (deptMap[d] || 0) + 1;
+  });
+
+  const roleMap = {};
+  users.forEach(u => {
+    const r = ROLE_LABELS[u.Role] || u.Role || 'غير محدد';
+    roleMap[r] = (roleMap[r] || 0) + 1;
+  });
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-users-cog', 'إحصائيات الموظفين');
+  html += `<div class="grid-4">
+    ${statCard('fa-users',       'إجمالي الموظفين',     total,    'موظف مسجّل',    '#f0fdf4','#16a34a')}
+    ${statCard('fa-user-check',  'موظفون نشطون',        active,   'يعملون حالياً', '#eff6ff','#2563eb')}
+    ${statCard('fa-user-times',  'موظفون غير نشطين',   inactive, 'معطّل / إجازة', '#fef2f2','#dc2626')}
+    ${statCard('fa-building',    'الأقسام',              Object.keys(deptMap).length, 'قسم', '#fff7ed','#ea580c')}
+  </div>`;
+
+  html += _sectionTitle('fa-sitemap', 'توزيع الموظفين حسب القسم');
+  html += `<div class="table-wrap"><div class="table-inner"><table>
+    <thead><tr><th>القسم</th><th>عدد الموظفين</th><th>النسبة</th></tr></thead>
+    <tbody>`;
+  Object.entries(deptMap).sort((a,b) => b[1]-a[1]).forEach(([dept, cnt]) => {
+    const pct = total > 0 ? ((cnt/total)*100).toFixed(1) : 0;
+    html += `<tr>
+      <td>${dept}</td>
+      <td class="font-mono">${cnt}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;background:#e5e7eb;border-radius:4px;height:8px;">
+            <div style="width:${pct}%;background:var(--brand);height:8px;border-radius:4px;"></div>
+          </div>
+          <span class="font-mono text-muted" style="font-size:.8rem;">${pct}%</span>
+        </div>
+      </td>
+    </tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+
+  html += _sectionTitle('fa-id-badge', 'توزيع الموظفين حسب الدور');
+  html += `<div class="table-wrap"><div class="table-inner"><table>
+    <thead><tr><th>الدور الوظيفي</th><th>العدد</th></tr></thead>
+    <tbody>`;
+  Object.entries(roleMap).sort((a,b) => b[1]-a[1]).forEach(([role, cnt]) => {
+    html += `<tr><td>${role}</td><td class="font-mono">${cnt}</td></tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+  return html;
+}
+
+/* ============================================================
+   MARKET_SUP
+   ============================================================ */
+async function _dashMARKET() {
+  const [campaigns, leads] = await Promise.all([
+    getDB('campaigns'),
+    getDB('leads'),
+  ]);
+
+  const cList = campaigns || [];
+  const lList = leads     || [];
+
+  const totalCampaigns  = cList.length;
+  const activeCampaigns = cList.filter(c => c.Status === 'نشطة' || c.Status === 'نشط').length;
+  const totalLeads      = lList.length;
+  const convertedLeads  = lList.filter(l => l.Status === 'RES').length;
+  const conversionRate  = totalLeads > 0 ? ((convertedLeads / totalLeads) * 100).toFixed(1) : 0;
+  const totalSpend      = cList.reduce((s, c) => s + (parseFloat(c.ActualBudget)    || 0), 0);
+  const expectedBudget  = cList.reduce((s, c) => s + (parseFloat(c.expectedBudget) || 0), 0);
+
+  const sourceMap = {};
+  lList.forEach(l => {
+    const src = l.AdSource || 'غير محدد';
+    sourceMap[src] = (sourceMap[src] || 0) + 1;
+  });
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-bullhorn', 'إحصائيات التسويق');
+  html += `<div class="grid-4">
+    ${statCard('fa-ad',           'إجمالي الحملات',     totalCampaigns,         `${activeCampaigns} نشطة`,          '#f0fdf4','#16a34a')}
+    ${statCard('fa-funnel-dollar','العملاء المحتملون',  totalLeads,              `${convertedLeads} محوّل`,          '#eff6ff','#2563eb')}
+    ${statCard('fa-percentage',   'معدل التحويل',       conversionRate + '%',   'من إجمالي العملاء',                '#fefce8','#ca8a04')}
+    ${statCard('fa-coins',        'الإنفاق الفعلي',    fmtCurrency(totalSpend), `متوقع: ${fmtCurrency(expectedBudget)}`,'#fff7ed','#ea580c')}
+  </div>`;
+
+  html += _sectionTitle('fa-list', 'تفاصيل الحملات');
+  if (cList.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-bullhorn"></i><p>لا توجد حملات مسجّلة</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>المصدر</th><th>البداية</th><th>النهاية</th><th>الميزانية المتوقعة</th><th>الفعلي</th><th>الحالة</th></tr></thead>
+      <tbody>`;
+    [...cList].sort((a,b)=>(b.Start||'').localeCompare(a.Start||'')).slice(0,10).forEach(c => {
+      const isActive = c.Status === 'نشطة' || c.Status === 'نشط';
+      html += `<tr>
+        <td>${c.AdSource||'-'}</td>
+        <td>${fmtDate(c.Start)||'-'}</td>
+        <td>${fmtDate(c.End)||'-'}</td>
+        <td>${fmtCurrency(parseFloat(c.expectedBudget)||0)}</td>
+        <td>${fmtCurrency(parseFloat(c.ActualBudget)||0)}</td>
+        <td>${isActive ? '<span class="badge badge-green">نشطة</span>' : '<span class="badge badge-gray">'+(c.Status||'-')+'</span>'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+
+  html += _sectionTitle('fa-chart-pie', 'مصادر العملاء المحتملين');
+  html += `<div class="table-wrap"><div class="table-inner"><table>
+    <thead><tr><th>المصدر</th><th>العدد</th><th>النسبة</th></tr></thead>
+    <tbody>`;
+  Object.entries(sourceMap).sort((a,b)=>b[1]-a[1]).forEach(([src, cnt]) => {
+    const pct = totalLeads > 0 ? ((cnt/totalLeads)*100).toFixed(1) : 0;
+    html += `<tr>
+      <td>${src}</td>
+      <td class="font-mono">${cnt}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;background:#e5e7eb;border-radius:4px;height:8px;">
+            <div style="width:${pct}%;background:var(--brand);height:8px;border-radius:4px;"></div>
+          </div>
+          <span class="font-mono text-muted" style="font-size:.8rem;">${pct}%</span>
+        </div>
+      </td>
+    </tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+  return html;
+}
+
+/* ============================================================
+   SALES_SUP
+   ============================================================ */
+async function _dashSALES() {
+  const [leads, visits] = await Promise.all([
+    getDB('leads'),
+    getDB('visits'),
+  ]);
+
+  const lList = leads  || [];
+  const vList = visits || [];
+
+  const myLeads  = lList.filter(l => l.SalesAgent === currentUser.EmpID || l.SalesAgent === currentUser.Name);
+  const myVisits = vList.filter(v => v.EmpID === currentUser.EmpID || v.AccID === currentUser.EmpID);
+
+  const totalLeads    = myLeads.length;
+  const fupLeads      = myLeads.filter(l => l.Status === 'FUP').length;
+  const resLeads      = myLeads.filter(l => l.Status === 'RES').length;
+  const lostLeads     = myLeads.filter(l => l.Status === 'LOST').length;
+  const newLeads      = myLeads.filter(l => l.Status === 'NEW').length;
+  const visitsCount   = myVisits.length;
+  const myRevenue     = myVisits.reduce((s, v) => s + (parseFloat(v.PaidAmount) || 0), 0);
+  const myOutstanding = myVisits.reduce((s, v) => s + (parseFloat(v.RemainingAmount) || 0), 0);
+  const convRate      = totalLeads > 0 ? ((resLeads/totalLeads)*100).toFixed(1)+'%' : '0%';
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-chart-line', 'إحصائياتي');
+  html += `<div class="grid-4">
+    ${statCard('fa-funnel-dollar',     'إجمالي عملائي المحتملين', totalLeads,              `${newLeads} جديد`,              '#f0fdf4','#16a34a')}
+    ${statCard('fa-phone',             'قيد المتابعة',            fupLeads,                'يحتاج اتصال',                  '#fff7ed','#ea580c')}
+    ${statCard('fa-check',             'تم التحويل',              resLeads,                `${lostLeads} ضائع`,             '#eff6ff','#2563eb')}
+    ${statCard('fa-calendar-check',    'زياراتي',                 visitsCount,             'زيارة مسجّلة',                  '#fefce8','#ca8a04')}
+  </div>`;
+  html += `<div class="grid-4" style="margin-top:16px;">
+    ${statCard('fa-money-bill-wave',   'إيراداتي المحصّلة',      fmtCurrency(myRevenue),     'مدفوع',                 '#f0fdf4','#16a34a')}
+    ${statCard('fa-hourglass-half',    'مستحقات غير محصّلة',    fmtCurrency(myOutstanding), 'متبقي',                 '#fef2f2','#dc2626')}
+    ${statCard('fa-times-circle',      'عملاء ضائعون',          lostLeads,                  'من إجمالي عملائي',      '#fef2f2','#dc2626')}
+    ${statCard('fa-percentage',        'معدل التحويل',          convRate,                   'من عملاء إلى مرضى',     '#f5f3ff','#7c3aed')}
+  </div>`;
+
+  const todayStr = nowDate();
+  const upcoming = myLeads
+    .filter(l => l.FollowUpDate >= todayStr && l.Status === 'FUP')
+    .sort((a,b)=>(a.FollowUpDate||'').localeCompare(b.FollowUpDate||''))
+    .slice(0, 10);
+
+  html += _sectionTitle('fa-calendar-alt', 'مواعيد المتابعة القادمة');
+  if (upcoming.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-calendar-check"></i><p>لا توجد متابعات قادمة</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>الاسم</th><th>الهاتف</th><th>تاريخ المتابعة</th><th>المصدر</th><th>الحالة</th></tr></thead>
+      <tbody>`;
+    upcoming.forEach(l => {
+      html += `<tr>
+        <td>${l.Name||'-'}</td>
+        <td class="font-mono">${l.Phone||'-'}</td>
+        <td>${fmtDate(l.FollowUpDate)||'-'}</td>
+        <td>${l.AdSource||'-'}</td>
+        <td>${leadStatusBadge(l.Status)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   ACC_SUP
+   ============================================================ */
+async function _dashACC() {
+  const [visits, inventory] = await Promise.all([
+    getDB('visits'),
+    getDB('inventory'),
+  ]);
+
+  const vList   = visits    || [];
+  const invList = inventory || [];
+
+  const totalRevenue   = vList.reduce((s, v) => s + (parseFloat(v.TotalAmount)     || 0), 0);
+  const totalPaid      = vList.reduce((s, v) => s + (parseFloat(v.PaidAmount)      || 0), 0);
+  const outstanding    = vList.reduce((s, v) => s + (parseFloat(v.RemainingAmount) || 0), 0);
+  const inventoryValue = invList.reduce((s, i) => s + ((parseFloat(i.CurrentQty)||0) * (parseFloat(i.UnitCost)||0)), 0);
+
+  const pmMap = {};
+  vList.forEach(v => {
+    const pm = v.PaymentMethod || 'غير محدد';
+    pmMap[pm] = (pmMap[pm] || 0) + (parseFloat(v.PaidAmount) || 0);
+  });
+
+  const unpaid = vList
+    .filter(v => parseFloat(v.RemainingAmount) > 0)
+    .sort((a,b) => (b.BookingDate||'').localeCompare(a.BookingDate||''))
+    .slice(0, 10);
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-coins', 'الملخص المالي');
+  html += `<div class="grid-4">
+    ${statCard('fa-money-bill',    'إجمالي الإيرادات',   fmtCurrency(totalRevenue), 'قيمة العقود',     '#f0fdf4','#16a34a')}
+    ${statCard('fa-check-circle',  'إجمالي المحصّل',    fmtCurrency(totalPaid),    'مبلغ مقبوض',      '#eff6ff','#2563eb')}
+    ${statCard('fa-hourglass-half','المبالغ المستحقة',  fmtCurrency(outstanding),  'رصيد غير محصّل',  '#fef2f2','#dc2626')}
+    ${statCard('fa-boxes',         'قيمة المخزون',      fmtCurrency(inventoryValue),'إجمالي الأصناف', '#fefce8','#ca8a04')}
+  </div>`;
+
+  html += _sectionTitle('fa-credit-card', 'وسائل الدفع');
+  html += `<div class="table-wrap"><div class="table-inner"><table>
+    <thead><tr><th>وسيلة الدفع</th><th>إجمالي المحصّل</th></tr></thead>
+    <tbody>`;
+  const pmEntries = Object.entries(pmMap).sort((a,b)=>b[1]-a[1]);
+  if (pmEntries.length === 0) {
+    html += `<tr><td colspan="2" style="text-align:center;color:var(--muted);">لا بيانات</td></tr>`;
+  } else {
+    pmEntries.forEach(([pm, amt]) => {
+      html += `<tr><td>${pm}</td><td class="font-mono">${fmtCurrency(amt)}</td></tr>`;
+    });
+  }
+  html += `</tbody></table></div></div>`;
+
+  html += _sectionTitle('fa-exclamation-circle', 'زيارات غير مسدّدة بالكامل');
+  if (unpaid.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-check-circle" style="color:#16a34a;"></i><p>لا توجد مبالغ مستحقة</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>المريض</th><th>الإجراء</th><th>تاريخ الحجز</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th></tr></thead>
+      <tbody>`;
+    unpaid.forEach(v => {
+      html += `<tr>
+        <td>${v.PatientName||getPatientName(v.PatientID)||'-'}</td>
+        <td>${v.ProcedureName||'-'}</td>
+        <td>${fmtDate(v.BookingDate)||'-'}</td>
+        <td>${fmtCurrency(parseFloat(v.TotalAmount)||0)}</td>
+        <td>${fmtCurrency(parseFloat(v.PaidAmount)||0)}</td>
+        <td class="text-danger font-mono">${fmtCurrency(parseFloat(v.RemainingAmount)||0)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   REC_SUP
+   ============================================================ */
+async function _dashREC() {
+  const [patients, visits, leads] = await Promise.all([
+    getDB('patients'),
+    getDB('visits'),
+    getDB('leads'),
+  ]);
+
+  const pList = patients || [];
+  const vList = visits   || [];
+  const lList = leads    || [];
+
+  const todayStr      = nowDate();
+  const todayVisits   = vList.filter(v => v.BookingDate === todayStr);
+  const totalPatients = pList.length;
+  const pendingLeads  = lList.filter(l => l.Status === 'NEW' || l.Status === 'FUP').length;
+  const newToday      = pList.filter(p => (p.CreatedAt||'').startsWith(todayStr)).length;
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-concierge-bell', 'إحصائيات الاستقبال');
+  html += `<div class="grid-4">
+    ${statCard('fa-calendar-day',   'مواعيد اليوم',             todayVisits.length, fmtDate(todayStr),        '#f0fdf4','#16a34a')}
+    ${statCard('fa-users',          'إجمالي المرضى',            totalPatients,      `${newToday} جديد اليوم`, '#eff6ff','#2563eb')}
+    ${statCard('fa-funnel-dollar',  'عملاء محتملون معلّقون',    pendingLeads,       'جديد أو متابعة',         '#fff7ed','#ea580c')}
+    ${statCard('fa-user-plus',      'مرضى جدد اليوم',          newToday,           'تم التسجيل اليوم',       '#fefce8','#ca8a04')}
+  </div>`;
+
+  html += _sectionTitle('fa-clipboard-list', 'مواعيد اليوم');
+  if (todayVisits.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-calendar-times"></i><p>لا توجد مواعيد اليوم</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>المريض</th><th>الإجراء</th><th>الطبيب</th><th>الإجمالي</th><th>الحالة</th></tr></thead>
+      <tbody>`;
+    todayVisits.forEach(v => {
+      html += `<tr>
+        <td>${v.PatientName||getPatientName(v.PatientID)||'-'}</td>
+        <td>${v.ProcedureName||'-'}</td>
+        <td>${v.DoctorName||getEmpName(v.DoctorID)||'-'}</td>
+        <td>${fmtCurrency(parseFloat(v.TotalAmount)||0)}</td>
+        <td>${visitStatusBadge(v.Status)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   CS_SUP
+   ============================================================ */
+async function _dashCS() {
+  const [patientslog, leads] = await Promise.all([
+    getDB('patientslog'),
+    getDB('leads'),
+  ]);
+
+  const flList = patientslog || [];
+  const lList  = leads       || [];
+
+  const totalFollowups   = flList.length;
+  const openLeads        = lList.filter(l => l.Status === 'NEW' || l.Status === 'FUP').length;
+  const todayStr         = nowDate();
+  const todayFollowups   = flList.filter(f => f.Date === todayStr).length;
+  const pendingFollowups = flList.filter(f => f.Status === 'معلّق' || f.Status === 'مجدول').length;
+
+  let html = _welcomeBar();
+  html += _sectionTitle('fa-headset', 'إحصائيات خدمة العملاء');
+  html += `<div class="grid-4">
+    ${statCard('fa-clipboard-list', 'إجمالي المتابعات',       totalFollowups,   'متابعة مسجّلة', '#f0fdf4','#16a34a')}
+    ${statCard('fa-calendar-day',   'متابعات اليوم',          todayFollowups,   fmtDate(todayStr),'#eff6ff','#2563eb')}
+    ${statCard('fa-clock',          'متابعات معلّقة',         pendingFollowups, 'تحتاج تنفيذ',   '#fff7ed','#ea580c')}
+    ${statCard('fa-funnel-dollar',  'عملاء محتملون مفتوحون', openLeads,        'جديد أو متابعة','#fefce8','#ca8a04')}
+  </div>`;
+
+  const recentFL = [...flList]
+    .sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))
+    .slice(0, 10);
+
+  html += _sectionTitle('fa-list-ul', 'آخر المتابعات');
+  if (recentFL.length === 0) {
+    html += `<div class="table-empty"><i class="fa fa-clipboard-list"></i><p>لا توجد متابعات مسجّلة</p></div>`;
+  } else {
+    html += `<div class="table-wrap"><div class="table-inner"><table>
+      <thead><tr><th>المريض</th><th>الطبيب</th><th>الإجراء</th><th>التاريخ</th><th>الحالة</th></tr></thead>
+      <tbody>`;
+    recentFL.forEach(f => {
+      let badge;
+      if (f.Status === 'مكتمل')       badge = '<span class="badge badge-green">مكتمل</span>';
+      else if (f.Status === 'معلّق')   badge = '<span class="badge badge-yellow">معلّق</span>';
+      else                             badge = `<span class="badge badge-gray">${f.Status||'-'}</span>`;
+      html += `<tr>
+        <td>${getPatientName(f.PatientID)||f.PatientID||'-'}</td>
+        <td>${f.DoctorName||getEmpName(f.DoctorID)||'-'}</td>
+        <td>${f.ProcedureName||'-'}</td>
+        <td>${fmtDate(f.Date)||'-'}</td>
+        <td>${badge}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+/* ============================================================
+   DEFAULT fallback
+   ============================================================ */
+function _dashDefault() {
+  return _welcomeBar() + `
+    <div class="table-empty">
+      <i class="fa fa-lock"></i>
+      <p>لا توجد لوحة تحكم مخصصة لدورك الحالي</p>
+    </div>`;
+}
+</script>

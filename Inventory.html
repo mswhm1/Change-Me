@@ -1,0 +1,439 @@
+﻿<script>
+/* ============================================================
+   Inventory.html — HairCare Pro ERP
+   Inventory Management Module
+   ============================================================ */
+
+let _invAll = [];
+let _invFiltered = [];
+let _invSearch = '';
+let _invCat = '';
+
+const INV_CATS = ['مستلزمات طبية', 'أدوية', 'مطهرات', 'أدوات جراحية', 'مستلزمات عامة'];
+const INV_UNITS = ['قطعة', 'علبة', 'زجاجة', 'كيس', 'لتر', 'مل', 'جرام'];
+
+// ── RENDER ──────────────────────────────────────────────────
+async function renderInventory() {
+  if (!canDo('inventory', 'r')) {
+    return '<div class="perm-denied"><i class="fa fa-lock"></i><p>ليس لديك صلاحية لعرض المخزون</p></div>';
+  }
+  showLoading('جاري تحميل المخزون…');
+  try {
+    const inv = await getDB('inventory');
+    _invAll = Array.isArray(inv) ? inv : [];
+    _invFiltered = [..._invAll];
+
+    const totalItems = _invAll.length;
+    const lowStock   = _invAll.filter(i => Number(i.CurrentQty) <= Number(i.MinQty)).length;
+    const totalVal   = _invAll.reduce((s, i) => s + (Number(i.CurrentQty) * Number(i.UnitCost || 0)), 0);
+
+    const lowBadge = lowStock > 0
+      ? '<span class="badge badge-red" style="margin-right:6px">' + lowStock + '</span>'
+      : '<span class="badge badge-green" style="margin-right:6px">' + lowStock + '</span>';
+
+    const kpis =
+      '<div class="grid-3" style="margin-bottom:22px">' +
+        statCard('fa-boxes', 'إجمالي الأصناف', totalItems, 'صنف مسجل', '#f0f4ff', '#4361ee') +
+        statCard('fa-exclamation-triangle', 'أصناف تحت الحد', lowBadge + lowStock, 'تحتاج تعبئة', lowStock > 0 ? '#fff5f5' : '#f0fff4', lowStock > 0 ? '#e63946' : '#2dc653') +
+        statCard('fa-dollar-sign', 'إجمالي قيمة المخزون', fmtCurrency(totalVal), 'بالجنيه المصري', '#fffbf0', '#f4a261') +
+      '</div>';
+
+    const catOpts = INV_CATS.map(function(c) {
+      return '<option value="' + c + '" ' + (_invCat === c ? 'selected' : '') + '>' + c + '</option>';
+    }).join('');
+
+    const addBtn = canDo('inventory', 'c')
+      ? '<button class="btn-primary" onclick="openInventoryForm()"><i class="fa fa-plus"></i> إضافة صنف</button>'
+      : '';
+
+    const filterBar =
+      '<div class="filter-bar" style="margin-bottom:16px">' +
+        '<input class="input-field" type="text" placeholder="🔍 بحث باسم الصنف أو المورد…" value="' + _invSearch + '" oninput="_invSearch=this.value;filterInventory()" style="min-width:220px">' +
+        '<select class="input-field" onchange="_invCat=this.value;filterInventory()">' +
+          '<option value="">كل الفئات</option>' + catOpts +
+        '</select>' +
+        addBtn +
+      '</div>';
+
+    setTimeout(_renderInvTable, 0);
+    return kpis + filterBar + '<div id="inv-table-wrap"></div>';
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء تحميل المخزون', 'error');
+    return '<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>حدث خطأ أثناء تحميل المخزون</p></div>';
+  } finally {
+    hideLoading();
+  }
+}
+
+function filterInventory() {
+  const q = (_invSearch || '').toLowerCase();
+  const cat = _invCat;
+  _invFiltered = _invAll.filter(function(i) {
+    const matchQ = !q || (i.ItemName || '').toLowerCase().includes(q) || (i.Supplier || '').toLowerCase().includes(q);
+    const matchC = !cat || i.Category === cat;
+    return matchQ && matchC;
+  });
+  _renderInvTable();
+}
+
+function _renderInvTable() {
+  const wrap = document.getElementById('inv-table-wrap');
+  if (!wrap) return;
+  if (!_invFiltered.length) {
+    wrap.innerHTML = '<div class="table-empty"><i class="fa fa-box-open"></i><p>لا توجد أصناف تطابق البحث</p></div>';
+    return;
+  }
+  const rows = _invFiltered.map(function(i) {
+    const low = Number(i.CurrentQty) <= Number(i.MinQty);
+    const qtyCell = low
+      ? '<span style="color:#e63946;font-weight:700">' + i.CurrentQty + ' ⚠</span>'
+      : i.CurrentQty;
+    const totalVal = fmtCurrency(Number(i.CurrentQty) * Number(i.UnitCost || 0));
+    const editBtn = canDo('inventory', 'u')
+      ? '<button class="btn-icon btn-icon-yellow" title="تعديل" onclick="openInventoryForm(\'' + i.ItemID + '\')"><i class="fa fa-edit"></i></button>' +
+        '<button class="btn-icon btn-icon-blue" title="إضافة مخزون" onclick="openStockIn(\'' + i.ItemID + '\')"><i class="fa fa-plus-circle"></i></button>' +
+        '<button class="btn-icon" title="سحب مخزون" onclick="openStockOut(\'' + i.ItemID + '\')" style="color:#f4a261"><i class="fa fa-minus-circle"></i></button>'
+      : '';
+    const delBtn = canDo('inventory', 'd')
+      ? '<button class="btn-icon btn-icon-red" title="حذف" onclick="deleteInventory(\'' + i.ItemID + '\')"><i class="fa fa-trash"></i></button>'
+      : '';
+    const logBtn = '<button class="btn-icon btn-icon-brand" title="سجل الحركات" onclick="viewInventoryLog(\'' + i.ItemID + '\')"><i class="fa fa-history"></i></button>';
+    return '<tr>' +
+      '<td class="font-mono text-muted" style="font-size:12px">' + i.ItemID + '</td>' +
+      '<td style="font-weight:600">' + i.ItemName + '</td>' +
+      '<td><span class="badge badge-blue">' + (i.Category || '—') + '</span></td>' +
+      '<td>' + (i.Unit || '—') + '</td>' +
+      '<td>' + qtyCell + '</td>' +
+      '<td>' + (i.MinQty != null ? i.MinQty : '—') + '</td>' +
+      '<td>' + fmtCurrency(i.UnitCost || 0) + '</td>' +
+      '<td style="font-weight:600">' + totalVal + '</td>' +
+      '<td>' + (i.Supplier || '—') + '</td>' +
+      '<td class="text-muted">' + fmtDate(i.LastUpdated) + '</td>' +
+      '<td style="white-space:nowrap">' + editBtn + logBtn + delBtn + '</td>' +
+    '</tr>';
+  }).join('');
+
+  wrap.innerHTML =
+    '<div class="table-wrap"><div class="table-inner"><table>' +
+      '<thead><tr>' +
+        '<th>الرقم</th><th>اسم الصنف</th><th>الفئة</th><th>الوحدة</th>' +
+        '<th>الكمية الحالية</th><th>الحد الأدنى</th><th>التكلفة/الوحدة</th>' +
+        '<th>القيمة الإجمالية</th><th>المورد</th><th>آخر تحديث</th><th>إجراءات</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div></div>';
+}
+
+// ── OPEN FORM ────────────────────────────────────────────────
+function openInventoryForm(id) {
+  const item = id ? _invAll.find(function(i){ return i.ItemID === id; }) : null;
+  const isEdit = !!item;
+  const catOpts = INV_CATS.map(function(c) {
+    return '<option value="' + c + '" ' + (item && item.Category === c ? 'selected' : '') + '>' + c + '</option>';
+  }).join('');
+  const unitOpts = INV_UNITS.map(function(u) {
+    return '<option value="' + u + '" ' + (item && item.Unit === u ? 'selected' : '') + '>' + u + '</option>';
+  }).join('');
+  const canSave = canDo('inventory', isEdit ? 'u' : 'c');
+
+  const html =
+    '<div class="grid-2" style="gap:14px">' +
+      '<div class="form-group">' +
+        '<label class="form-label">اسم الصنف *</label>' +
+        '<input class="input-field" id="inv-name" value="' + (item ? item.ItemName : '') + '" placeholder="اسم الصنف">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الفئة *</label>' +
+        '<select class="input-field" id="inv-cat">' + catOpts + '</select>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الوحدة *</label>' +
+        '<select class="input-field" id="inv-unit">' + unitOpts + '</select>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الكمية الحالية *</label>' +
+        '<input class="input-field" id="inv-qty" type="number" min="0" value="' + (item ? item.CurrentQty : 0) + '">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">الحد الأدنى *</label>' +
+        '<input class="input-field" id="inv-minqty" type="number" min="0" value="' + (item ? item.MinQty : 0) + '">' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">تكلفة الوحدة (ج)</label>' +
+        '<input class="input-field" id="inv-cost" type="number" min="0" value="' + (item ? item.UnitCost : 0) + '">' +
+      '</div>' +
+      '<div class="form-group" style="grid-column:1/-1">' +
+        '<label class="form-label">المورد</label>' +
+        '<input class="input-field" id="inv-supplier" value="' + (item ? (item.Supplier || '') : '') + '" placeholder="اسم المورد أو الشركة">' +
+      '</div>' +
+      '<div class="form-group" style="grid-column:1/-1">' +
+        '<label class="form-label">ملاحظات</label>' +
+        '<textarea class="input-field" id="inv-notes" rows="3">' + (item ? (item.Notes || '') : '') + '</textarea>' +
+      '</div>' +
+    '</div>' +
+    (canSave ? '<div class="modal-footer"><button class="btn-primary" onclick="saveInventory(\'' + (id || '') + '\')"><i class="fa fa-save"></i> حفظ</button></div>' : '');
+
+  openModal(isEdit ? 'تعديل صنف: ' + item.ItemName : 'إضافة صنف جديد', html);
+}
+
+async function saveInventory(id) {
+  const name     = (document.getElementById('inv-name') || {}).value.trim();
+  const cat      = (document.getElementById('inv-cat') || {}).value;
+  const unit     = (document.getElementById('inv-unit') || {}).value;
+  const qty      = Number((document.getElementById('inv-qty') || {}).value);
+  const minQty   = Number((document.getElementById('inv-minqty') || {}).value);
+  const cost     = Number((document.getElementById('inv-cost') || {}).value);
+  const supplier = (document.getElementById('inv-supplier') || {}).value.trim();
+  const notes    = (document.getElementById('inv-notes') || {}).value.trim();
+
+  if (!name) { toast('يرجى إدخال اسم الصنف', 'error'); return; }
+  if (isNaN(qty) || qty < 0) { toast('الكمية غير صالحة', 'error'); return; }
+
+  showLoading('جاري الحفظ…');
+  try {
+    let inv = await getDB('inventory') || [];
+    const isEdit = !!id;
+    let itemId = id;
+    let oldQty = 0;
+
+    if (isEdit) {
+      const idx = inv.findIndex(function(i){ return i.ItemID === id; });
+      if (idx < 0) { toast('الصنف غير موجود', 'error'); return; }
+      oldQty = Number(inv[idx].CurrentQty);
+      inv[idx] = Object.assign({}, inv[idx], {
+        ItemName: name, Category: cat, Unit: unit,
+        CurrentQty: qty, MinQty: minQty, UnitCost: cost,
+        Supplier: supplier, Notes: notes, LastUpdated: nowDate()
+      });
+    } else {
+      itemId = await genID('IT');
+      inv.push({
+        ItemID: itemId, ItemName: name, Category: cat, Unit: unit,
+        CurrentQty: qty, MinQty: minQty, UnitCost: cost,
+        Supplier: supplier, Notes: notes, LastUpdated: nowDate()
+      });
+    }
+
+    await setDB('inventory', inv);
+
+    const logs = await getDB('inventorylog') || [];
+    logs.push({
+      LogID: await genID('IL'),
+      ItemID: itemId,
+      ItemName: name,
+      TransactionType: isEdit ? 'تعديل' : 'إضافة صنف جديد',
+      Quantity: isEdit ? (qty - oldQty) : qty,
+      ReferenceID: '',
+      HandledBy: currentUser.Name,
+      Date: nowDate(),
+      Notes: isEdit ? 'تعديل بيانات الصنف' : ('إضافة صنف جديد بكمية ' + qty)
+    });
+    await setDB('inventorylog', logs);
+
+    toast(isEdit ? 'تم تحديث الصنف بنجاح' : 'تم إضافة الصنف بنجاح', 'success');
+    closeModal();
+    await renderInventory();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function deleteInventory(id) {
+  if (!canDo('inventory', 'd')) { toast('لا تملك صلاحية الحذف', 'error'); return; }
+  const item = _invAll.find(function(i){ return i.ItemID === id; });
+  if (!item) return;
+  if (!confirm('هل تريد حذف الصنف "' + item.ItemName + '"؟ سيتم حذف جميع بيانات الحركات المرتبطة به.')) return;
+
+  showLoading('جاري الحذف…');
+  try {
+    let inv = await getDB('inventory') || [];
+    inv = inv.filter(function(i){ return i.ItemID !== id; });
+    await setDB('inventory', inv);
+    toast('تم حذف الصنف بنجاح', 'success');
+    await renderInventory();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء الحذف', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── STOCK IN ─────────────────────────────────────────────────
+function openStockIn(id) {
+  const item = _invAll.find(function(i){ return i.ItemID === id; });
+  if (!item) return;
+  const html =
+    '<div class="info-box" style="margin-bottom:14px">' +
+      '<b>' + item.ItemName + '</b> — الكمية الحالية: <b>' + item.CurrentQty + ' ' + item.Unit + '</b>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">الكمية المضافة *</label>' +
+      '<input class="input-field" id="si-qty" type="number" min="1" value="1" placeholder="أدخل الكمية">' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">ملاحظات</label>' +
+      '<textarea class="input-field" id="si-notes" rows="2" placeholder="مصدر الوارد، رقم الفاتورة…"></textarea>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="btn-primary" onclick="_saveStockIn(\'' + id + '\')"><i class="fa fa-plus-circle"></i> إضافة للمخزون</button>' +
+    '</div>';
+  openModal('إضافة مخزون — ' + item.ItemName, html, 'narrow');
+}
+
+async function _saveStockIn(id) {
+  const qty   = Number((document.getElementById('si-qty') || {}).value);
+  const notes = ((document.getElementById('si-notes') || {}).value || '').trim();
+  if (!qty || qty <= 0) { toast('يرجى إدخال كمية صحيحة', 'error'); return; }
+
+  showLoading('جاري التحديث…');
+  try {
+    let inv = await getDB('inventory') || [];
+    const idx = inv.findIndex(function(i){ return i.ItemID === id; });
+    if (idx < 0) { toast('الصنف غير موجود', 'error'); return; }
+    const item = inv[idx];
+    inv[idx] = Object.assign({}, item, { CurrentQty: Number(item.CurrentQty) + qty, LastUpdated: nowDate() });
+    await setDB('inventory', inv);
+
+    const logs = await getDB('inventorylog') || [];
+    logs.push({
+      LogID: await genID('IL'),
+      ItemID: id,
+      ItemName: item.ItemName,
+      TransactionType: 'وارد',
+      Quantity: qty,
+      ReferenceID: '',
+      HandledBy: currentUser.Name,
+      Date: nowDate(),
+      Notes: notes
+    });
+    await setDB('inventorylog', logs);
+
+    toast('تمت إضافة ' + qty + ' ' + item.Unit + ' للمخزون', 'success');
+    closeModal();
+    await renderInventory();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── STOCK OUT ────────────────────────────────────────────────
+function openStockOut(id) {
+  const item = _invAll.find(function(i){ return i.ItemID === id; });
+  if (!item) return;
+  const html =
+    '<div class="info-box" style="margin-bottom:14px">' +
+      '<b>' + item.ItemName + '</b> — الكمية الحالية: <b>' + item.CurrentQty + ' ' + item.Unit + '</b>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">الكمية المسحوبة * (الحد الأقصى: ' + item.CurrentQty + ')</label>' +
+      '<input class="input-field" id="so-qty" type="number" min="1" max="' + item.CurrentQty + '" value="1" placeholder="أدخل الكمية">' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label class="form-label">ملاحظات</label>' +
+      '<textarea class="input-field" id="so-notes" rows="2" placeholder="سبب السحب، جهة الاستخدام…"></textarea>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="btn-danger" onclick="_saveStockOut(\'' + id + '\',' + item.CurrentQty + ')"><i class="fa fa-minus-circle"></i> سحب من المخزون</button>' +
+    '</div>';
+  openModal('سحب مخزون — ' + item.ItemName, html, 'narrow');
+}
+
+async function _saveStockOut(id, currentQty) {
+  const qty   = Number((document.getElementById('so-qty') || {}).value);
+  const notes = ((document.getElementById('so-notes') || {}).value || '').trim();
+  const maxQ  = Number(currentQty);
+  if (!qty || qty <= 0) { toast('يرجى إدخال كمية صحيحة', 'error'); return; }
+  if (qty > maxQ) { toast('الكمية المسحوبة (' + qty + ') تتجاوز المخزون الحالي (' + maxQ + ')', 'error'); return; }
+
+  showLoading('جاري التحديث…');
+  try {
+    let inv = await getDB('inventory') || [];
+    const idx = inv.findIndex(function(i){ return i.ItemID === id; });
+    if (idx < 0) { toast('الصنف غير موجود', 'error'); return; }
+    const item = inv[idx];
+    inv[idx] = Object.assign({}, item, { CurrentQty: Number(item.CurrentQty) - qty, LastUpdated: nowDate() });
+    await setDB('inventory', inv);
+
+    const logs = await getDB('inventorylog') || [];
+    logs.push({
+      LogID: await genID('IL'),
+      ItemID: id,
+      ItemName: item.ItemName,
+      TransactionType: 'صادر',
+      Quantity: qty,
+      ReferenceID: '',
+      HandledBy: currentUser.Name,
+      Date: nowDate(),
+      Notes: notes
+    });
+    await setDB('inventorylog', logs);
+
+    toast('تم سحب ' + qty + ' ' + item.Unit + ' من المخزون', 'success');
+    closeModal();
+    await renderInventory();
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ── INVENTORY LOG ────────────────────────────────────────────
+async function viewInventoryLog(id) {
+  const item = _invAll.find(function(i){ return i.ItemID === id; });
+  if (!item) return;
+  showLoading('جاري تحميل السجل…');
+  try {
+    const logs = await getDB('inventorylog') || [];
+    const itemLogs = logs.filter(function(l){ return l.ItemID === id; })
+      .sort(function(a, b){ return (b.Date || '').localeCompare(a.Date || ''); });
+
+    let tableHtml;
+    if (!itemLogs.length) {
+      tableHtml = '<div class="table-empty"><i class="fa fa-history"></i><p>لا توجد حركات مسجلة لهذا الصنف</p></div>';
+    } else {
+      const rows = itemLogs.map(function(l) {
+        const typeBadge = l.TransactionType === 'وارد'
+          ? '<span class="badge badge-green">وارد</span>'
+          : l.TransactionType === 'صادر'
+          ? '<span class="badge badge-red">صادر</span>'
+          : '<span class="badge badge-blue">' + l.TransactionType + '</span>';
+        return '<tr>' +
+          '<td class="text-muted">' + fmtDate(l.Date) + '</td>' +
+          '<td>' + typeBadge + '</td>' +
+          '<td style="font-weight:600">' + (l.Quantity > 0 ? '+' : '') + l.Quantity + '</td>' +
+          '<td>' + (l.HandledBy || '—') + '</td>' +
+          '<td class="text-muted">' + (l.Notes || '—') + '</td>' +
+        '</tr>';
+      }).join('');
+      tableHtml =
+        '<div class="table-wrap"><div class="table-inner"><table>' +
+          '<thead><tr><th>التاريخ</th><th>النوع</th><th>الكمية</th><th>بواسطة</th><th>ملاحظات</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table></div></div>';
+    }
+
+    const html =
+      '<div class="info-box" style="margin-bottom:16px">' +
+        '<b>' + item.ItemName + '</b> | الفئة: ' + item.Category +
+        ' | الكمية الحالية: <b>' + item.CurrentQty + ' ' + item.Unit + '</b>' +
+      '</div>' + tableHtml;
+
+    openModal('سجل حركات المخزون — ' + item.ItemName, html, 'wide');
+  } catch(e) {
+    console.error(e);
+    toast('حدث خطأ أثناء تحميل السجل', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+</script>

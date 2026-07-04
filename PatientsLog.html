@@ -1,0 +1,246 @@
+<script>
+// =====================================================
+//  HairCare Pro — PatientsLog.html
+//  متابعة المرضى (Follow-up Logs)
+// =====================================================
+
+var _plogData = [];
+var _plogPatients = [];
+var _plogDoctors = [];
+
+async function renderPatientsLog() {
+  showLoading('جاري تحميل سجلات متابعة المرضى...');
+  try {
+    _plogData = await getDB('patientslog');
+    _plogPatients = getPatientsCache();
+    var allUsers = getUsersCache();
+    _plogDoctors = allUsers.filter(function(u) { return u.Role === 'DOC_SUP' && u.Status === 'active'; });
+
+    var patientFilterOpts = '<option value="">— كل المرضى —</option>' + _plogPatients.map(function(p) {
+      return '<option value="' + p.PatientID + '">' + p.Name + ' (' + p.PatientID + ')</option>';
+    }).join('');
+
+    var addBtn = canDo('patientslog', 'c')
+      ? '<button class="btn-primary" onclick="openPLogForm()"><i class="fas fa-plus ml-1"></i>إضافة متابعة</button>'
+      : '';
+
+    var html = '<div class="section-header">'
+      + '  <h2><i class="fas fa-notes-medical text-brand ml-2"></i>متابعة وفحوصات المرضى</h2>'
+      + addBtn
+      + '</div>'
+      + '<div class="table-wrap" style="padding: 16px; margin-bottom: 20px;">'
+      + '  <div class="grid-2">'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">بحث باسم المريض</label>'
+      + '      <select id="filterLogPatient" class="input-field" onchange="filterPLog()">' + patientFilterOpts + '</select>'
+      + '    </div>'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">الحالة</label>'
+      + '      <select id="filterLogStatus" class="input-field" onchange="filterPLog()">'
+      + '        <option value="">— كل الحالات —</option>'
+      + '        <option value="متابعة">متابعة</option>'
+      + '        <option value="مكتمل">مكتمل</option>'
+      + '        <option value="ملغي">ملغي</option>'
+      + '      </select>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>'
+      + '<div class="table-wrap">'
+      + '  <div class="table-inner">'
+      + '    <table>'
+      + '      <thead>'
+      + '        <tr>'
+      + '          <th>الرقم</th>'
+      + '          <th>المريض</th>'
+      + '          <th>الطبيب المتابع</th>'
+      + '          <th>نوع الإجراء/المتابعة</th>'
+      + '          <th>تاريخ المتابعة</th>'
+      + '          <th>ملاحظات</th>'
+      + '          <th>الحالة</th>'
+      + '          <th>إجراءات</th>'
+      + '        </tr>'
+      + '      </thead>'
+      + '      <tbody id="pLogTableBody">' + _renderPLogRows(_plogData) + '</tbody>'
+      + '    </table>'
+      + '  </div>'
+      + '</div>';
+
+    hideLoading();
+    return html;
+  } catch(e) {
+    console.error('renderPatientsLog error:', e);
+    hideLoading();
+    return '<div class="table-empty"><i class="fas fa-exclamation-circle text-danger"></i><p>حدث خطأ أثناء تحميل البيانات</p></div>';
+  }
+}
+
+function _renderPLogRows(data) {
+  if (!data || data.length === 0) {
+    return '<tr><td colspan="8" class="table-empty"><i class="fas fa-notes-medical"></i><p>لا توجد سجلات متابعة مسجلة</p></td></tr>';
+  }
+
+  return data.map(function(l) {
+    var statusBadge = l.Status === 'مكتمل' ? '<span class="badge badge-green">مكتمل</span>'
+                    : (l.Status === 'ملغي' ? '<span class="badge badge-red">ملغي</span>'
+                    : '<span class="badge badge-blue">متابعة</span>');
+
+    var editBtn = canDo('patientslog', 'u')
+      ? '<button class="btn-icon btn-icon-brand" onclick="openPLogForm(\'' + l.FollowUpID + '\')" title="تعديل"><i class="fas fa-edit"></i></button>'
+      : '';
+    var delBtn = canDo('patientslog', 'd')
+      ? '<button class="btn-icon btn-icon-red" onclick="deletePLog(\'' + l.FollowUpID + '\')" title="حذف"><i class="fas fa-trash"></i></button>'
+      : '';
+
+    return '<tr>'
+      + '  <td class="text-brand font-mono font-bold">' + l.FollowUpID + '</td>'
+      + '  <td class="text-white font-bold">' + getPatientName(l.PatientID) + '</td>'
+      + '  <td>' + (l.DoctorName || getEmpName(l.DoctorID)) + '</td>'
+      + '  <td>' + (l.ProcedureName || '—') + '</td>'
+      + '  <td class="text-muted font-mono">' + fmtDate(l.Date) + '</td>'
+      + '  <td class="truncate" style="max-width: 250px;" title="' + (l.Notes || '') + '">' + (l.Notes || '—') + '</td>'
+      + '  <td>' + statusBadge + '</td>'
+      + '  <td class="actions">' + editBtn + ' ' + delBtn + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function filterPLog() {
+  var pid = document.getElementById('filterLogPatient').value;
+  var status = document.getElementById('filterLogStatus').value;
+
+  var filtered = _plogData.filter(function(l) {
+    var matchPid = !pid || l.PatientID === pid;
+    var matchStatus = !status || l.Status === status;
+    return matchPid && matchStatus;
+  });
+
+  document.getElementById('pLogTableBody').innerHTML = _renderPLogRows(filtered);
+}
+
+function openPLogForm(id) {
+  var log = null;
+  if (id) {
+    log = _plogData.find(function(x) { return x.FollowUpID === id; });
+  }
+
+  var patientOptions = '<option value="">— اختر المريض —</option>' + _plogPatients.map(function(p) {
+    return '<option value="' + p.PatientID + '" ' + (log && log.PatientID === p.PatientID ? 'selected' : '') + '>' + p.Name + ' (' + p.PatientID + ')</option>';
+  }).join('');
+
+  var doctorOptions = '<option value="">— اختر الطبيب —</option>' + _plogDoctors.map(function(d) {
+    return '<option value="' + d.EmpID + '" ' + (log && log.DoctorID === d.EmpID ? 'selected' : '') + '>' + d.Name + '</option>';
+  }).join('');
+
+  var html = '<div class="grid-2">'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">المريض</label>'
+    + '    <select id="f_plPatient" class="input-field">' + patientOptions + '</select>'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">الطبيب المتابع</label>'
+    + '    <select id="f_plDoctor" class="input-field">' + doctorOptions + '</select>'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">الإجراء / المتابعة</label>'
+    + '    <input id="f_plProc" class="input-field" placeholder="متابعة ما بعد العملية / PRP / فحص" value="' + (log ? log.ProcedureName : '') + '">'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">التاريخ</label>'
+    + '    <input id="f_plDate" type="date" class="input-field" value="' + (log ? fmtDate(log.Date) : nowDate()) + '">'
+    + '  </div>'
+    + '  <div class="form-group" style="grid-column: span 2;">'
+    + '    <label class="form-label">حالة المتابعة</label>'
+    + '    <select id="f_plStatus" class="input-field">'
+    + '      <option value="متابعة" ' + (log && log.Status === 'متابعة' ? 'selected' : '') + '>متابعة مستمرة</option>'
+    + '      <option value="مكتمل" ' + (log && log.Status === 'مكتمل' ? 'selected' : '') + '>مكتملة</option>'
+    + '      <option value="ملغي" ' + (log && log.Status === 'ملغي' ? 'selected' : '') + '>ملغية</option>'
+    + '    </select>'
+    + '  </div>'
+    + '  <div class="form-group" style="grid-column: span 2;">'
+    + '    <label class="form-label">ملاحظات الفحص</label>'
+    + '    <textarea id="f_plNotes" class="input-field" rows="3" placeholder="أدخل تفاصيل الفحص وتطور الحالة...">' + (log ? log.Notes : '') + '</textarea>'
+    + '  </div>'
+    + '</div>'
+    + '<div class="modal-footer">'
+    + '  <button class="btn-secondary" onclick="closeModal()">إلغاء</button>'
+    + '  <button class="btn-primary" onclick="savePLog(\'' + (id || '') + '\')"><i class="fas fa-save ml-1"></i>حفظ السجل</button>'
+    + '</div>';
+
+  openModal(id ? 'تعديل سجل متابعة' : 'إضافة سجل متابعة جديد', html);
+}
+
+async function savePLog(id) {
+  var pid = document.getElementById('f_plPatient').value;
+  var docId = document.getElementById('f_plDoctor').value;
+  var proc = document.getElementById('f_plProc').value.trim();
+  var date = document.getElementById('f_plDate').value;
+  var status = document.getElementById('f_plStatus').value;
+  var notes = document.getElementById('f_plNotes').value.trim();
+
+  if (!pid || !docId || !proc || !date) {
+    toast('يرجى ملء جميع الحقول الإلزامية', 'error');
+    return;
+  }
+
+  showLoading('جاري حفظ البيانات...');
+  try {
+    var data = await getDB('patientslog');
+    var dSel = document.getElementById('f_plDoctor');
+    var docName = dSel.options[dSel.selectedIndex].text;
+
+    var obj = {
+      PatientID: pid,
+      DoctorID: docId,
+      DoctorName: docName,
+      ProcedureName: proc,
+      Date: date,
+      Status: status,
+      Notes: notes
+    };
+
+    if (id) {
+      var idx = data.findIndex(function(x) { return x.FollowUpID === id; });
+      if (idx > -1) {
+        obj.FollowUpID = id;
+        // الاحتفاظ بالصورة إن وجدت
+        obj.Photo = data[idx].Photo || '';
+        Object.assign(data[idx], obj);
+      }
+    } else {
+      obj.FollowUpID = await genID('FU');
+      obj.Photo = '';
+      data.push(obj);
+      
+      // إرسال إشعار للطبيب
+      await addNotif('DOC_SUP', currentUser.EmpID, 'تمت إضافة سجل متابعة جديد للمريض ' + getPatientName(pid), 'Patient', pid);
+    }
+
+    await setDB('patientslog', data);
+    hideLoading();
+    closeModal();
+    navigateTo('patientslog');
+    toast(id ? 'تم تحديث المتابعة بنجاح' : 'تم إضافة المتابعة بنجاح', 'success');
+  } catch(e) {
+    console.error('savePLog error:', e);
+    hideLoading();
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  }
+}
+
+async function deletePLog(id) {
+  if (!confirm('هل أنت متأكد من رغبتك في حذف هذا السجل نهائياً؟')) return;
+  showLoading('جاري حذف السجل...');
+  try {
+    var data = await getDB('patientslog');
+    data = data.filter(function(x) { return x.FollowUpID !== id; });
+    await setDB('patientslog', data);
+    hideLoading();
+    navigateTo('patientslog');
+    toast('تم حذف السجل بنجاح', 'info');
+  } catch(e) {
+    console.error('deletePLog error:', e);
+    hideLoading();
+    toast('حدث خطأ أثناء الحذف', 'error');
+  }
+}
+</script>

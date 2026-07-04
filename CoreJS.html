@@ -1,0 +1,782 @@
+<script>
+// =====================================================
+//  HairCare Pro — CoreJS.html
+//  المنطق الأساسي: Auth + Permissions + Navigation + Utilities
+// =====================================================
+
+// ===== خريطة الأوراق =====
+var DB_MAP = {
+  patients:       'Patients',
+  leads:          'Leads',
+  campaigns:      'Marketing',
+  visits:         'visit',
+  medicalrecords: 'MedicalRecords',
+  operations:     'Operations',
+  optimeline:     'OPTimeline',
+  patientslog:    'PatientsLog',
+  inventory:      'Inventory',
+  inventorylog:   'InventoryLog',
+  notifications:  'Notifications',
+  users:          'Users_HR'
+};
+
+// ===== اتصال بالسيرفر =====
+function serverGet(sn) {
+  return new Promise(function(res) {
+    google.script.run
+      .withSuccessHandler(function(r) { res(r || []); })
+      .withFailureHandler(function(e) { console.error('serverGet error:', e); res([]); })
+      .getSheetData(sn);
+  });
+}
+function serverSet(sn, d) {
+  return new Promise(function(res, rej) {
+    google.script.run
+      .withSuccessHandler(res)
+      .withFailureHandler(function(e) { console.error('serverSet error:', e); rej(e); })
+      .saveSheetData(sn, d);
+  });
+}
+function serverNextId(sn, col, pre) {
+  return new Promise(function(res) {
+    google.script.run
+      .withSuccessHandler(res)
+      .withFailureHandler(function() { res(pre + '0001'); })
+      .getNextId(sn, col, pre);
+  });
+}
+async function getDB(key)        { return await serverGet(DB_MAP[key]); }
+async function setDB(key, data)  { await serverSet(DB_MAP[key], data); }
+async function genID(pre) {
+  var map = {
+    P:  ['Patients',       'PatientID'],
+    L:  ['Leads',          'LeadID'],
+    V:  ['visit',          'VisitID'],
+    OP: ['Operations',     'OperationID'],
+    C:  ['Marketing',      'CampaignID'],
+    IT: ['Inventory',      'ItemID'],
+    IL: ['InventoryLog',   'LogID'],
+    FU: ['PatientsLog',    'FollowUpID'],
+    MR: ['MedicalRecords', 'RecordID'],
+    N:  ['Notifications',  'NotifID']
+  };
+  var c = map[pre] || ['Patients', 'PatientID'];
+  return await serverNextId(c[0], c[1], pre);
+}
+
+// ===== تحميل =====
+function showLoading(msg) {
+  var el = document.getElementById('loadingOverlay');
+  if (el) {
+    el.style.display = 'flex';
+    var p = el.querySelector('p');
+    if (p) p.textContent = msg || 'جاري التحميل...';
+  }
+}
+function hideLoading() {
+  var el = document.getElementById('loadingOverlay');
+  if (el) el.style.display = 'none';
+}
+
+// =====================================================
+//  الصلاحيات — Roles & Permissions
+// =====================================================
+
+// قائمة الصفحات لكل دور
+var ROLE_MENU = {
+  ADM_SUP:    ['dashboard','patients','leads','visits','medical','operations','optimeline','patientslog','marketing','inventory','notifications','users'],
+  DOC_SUP:    ['dashboard','patients','visits','medical','patientslog','notifications'],
+  NRS_SUP:    ['dashboard','patients','visits','operations','optimeline','notifications'],
+  HR_SUP:     ['dashboard','users','notifications'],
+  MARKET_SUP: ['dashboard','leads','marketing','notifications'],
+  SALES_SUP:  ['dashboard','leads','patients','visits','notifications'],
+  ACC_SUP:    ['dashboard','visits','inventory','notifications'],
+  REC_SUP:    ['dashboard','patients','visits','notifications'],
+  CS_SUP:     ['dashboard','patients','patientslog','notifications']
+};
+
+// صلاحيات CRUD لكل دور على كل موديول
+var ROLE_PERMS = {
+  ADM_SUP: {
+    patients:    {c:true,  r:true, u:true,  d:true},
+    leads:       {c:true,  r:true, u:true,  d:true},
+    visits:      {c:true,  r:true, u:true,  d:true},
+    medical:     {c:true,  r:true, u:true,  d:true},
+    operations:  {c:true,  r:true, u:true,  d:true},
+    patientslog: {c:true,  r:true, u:true,  d:true},
+    marketing:   {c:true,  r:true, u:true,  d:true},
+    inventory:   {c:true,  r:true, u:true,  d:true},
+    users:       {c:true,  r:true, u:true,  d:true},
+    notifications:{c:true, r:true, u:true,  d:true}
+  },
+  DOC_SUP: {
+    patients:    {c:false, r:true, u:false, d:false},
+    visits:      {c:false, r:true, u:false, d:false},
+    medical:     {c:true,  r:true, u:true,  d:false},
+    patientslog: {c:false, r:true, u:false, d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  NRS_SUP: {
+    patients:    {c:false, r:true, u:false, d:false},
+    visits:      {c:false, r:true, u:false, d:false},
+    operations:  {c:true,  r:true, u:true,  d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  HR_SUP: {
+    users:       {c:true,  r:true, u:true,  d:true},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  MARKET_SUP: {
+    leads:       {c:true,  r:true, u:true,  d:false},
+    marketing:   {c:true,  r:true, u:true,  d:true},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  SALES_SUP: {
+    leads:       {c:true,  r:true, u:true,  d:false},
+    patients:    {c:false, r:true, u:false, d:false},
+    visits:      {c:true,  r:true, u:true,  d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  ACC_SUP: {
+    visits:      {c:false, r:true, u:true,  d:false},
+    inventory:   {c:true,  r:true, u:true,  d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  REC_SUP: {
+    patients:    {c:false, r:true, u:true,  d:false},
+    visits:      {c:true,  r:true, u:true,  d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  },
+  CS_SUP: {
+    patients:    {c:false, r:true, u:false, d:false},
+    patientslog: {c:true,  r:true, u:true,  d:false},
+    notifications:{c:false,r:true, u:true,  d:false}
+  }
+};
+
+// فحص صلاحية معينة
+function canDo(module, action) {
+  if (!currentUser) return false;
+  var rp = ROLE_PERMS[currentUser.Role];
+  if (!rp) return false;
+  var mp = rp[module];
+  if (!mp) return false;
+  return mp[action] === true;
+}
+
+// أسماء الأدوار
+var ROLE_NAMES = {
+  ADM_SUP:    'مدير النظام',
+  DOC_SUP:    'طبيب',
+  NRS_SUP:    'تمريض',
+  HR_SUP:     'موارد بشرية',
+  MARKET_SUP: 'تسويق',
+  SALES_SUP:  'مبيعات',
+  ACC_SUP:    'محاسبة',
+  REC_SUP:    'استقبال',
+  CS_SUP:     'خدمة عملاء'
+};
+
+// عناصر القائمة
+var MENU_ITEMS = {
+  dashboard:   { icon: 'fa-th-large',       label: 'لوحة التحكم',        group: 'عام' },
+  patients:    { icon: 'fa-user-injured',    label: 'المرضى',             group: 'طبي' },
+  patientslog: { icon: 'fa-notes-medical',   label: 'متابعة المرضى',      group: 'طبي' },
+  visits:      { icon: 'fa-calendar-check',  label: 'الحجوزات',           group: 'طبي' },
+  medical:     { icon: 'fa-file-medical',    label: 'السجلات الطبية',     group: 'طبي' },
+  operations:  { icon: 'fa-procedures',      label: 'العمليات',           group: 'طبي' },
+  optimeline:  { icon: 'fa-stream',          label: 'متابعة العمليات',    group: 'طبي' },
+  leads:       { icon: 'fa-funnel-dollar',   label: 'العملاء المحتملين',  group: 'مبيعات' },
+  marketing:   { icon: 'fa-bullhorn',        label: 'الحملات التسويقية',  group: 'مبيعات' },
+  inventory:   { icon: 'fa-boxes-stacked',   label: 'المخزون',            group: 'إدارة' },
+  users:       { icon: 'fa-users-cog',       label: 'الموظفين',           group: 'إدارة' },
+  notifications:{ icon: 'fa-bell',           label: 'الإشعارات',          group: 'إدارة' }
+};
+
+var ROLE_MOBILE_PRIMARY = {
+  ADM_SUP:    ['dashboard','notifications','patients','visits'],
+  DOC_SUP:    ['dashboard','medical','visits','patientslog'],
+  NRS_SUP:    ['dashboard','operations','optimeline','visits'],
+  HR_SUP:     ['dashboard','users','notifications'],
+  MARKET_SUP: ['dashboard','marketing','leads','notifications'],
+  SALES_SUP:  ['dashboard','leads','visits','patients'],
+  ACC_SUP:    ['dashboard','visits','inventory','notifications'],
+  REC_SUP:    ['dashboard','visits','patients','notifications'],
+  CS_SUP:     ['dashboard','patientslog','patients','notifications']
+};
+
+// =====================================================
+//  المتغيرات العامة
+// =====================================================
+var currentUser = null;
+var currentPage = 'dashboard';
+var initialMobileMode = document.documentElement.classList.contains('mobile-mode') ||
+                        document.documentElement.getAttribute('data-initial-mobile') === 'true';
+
+function updateResponsiveMode() {
+  var isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  var uaMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent || '');
+  var shortSide = Math.min(window.screen ? window.screen.width : window.innerWidth, window.screen ? window.screen.height : window.innerHeight);
+  var forceMobile = initialMobileMode || window.innerWidth <= 980 || uaMobile || (isTouch && shortSide <= 900);
+  document.documentElement.classList.toggle('mobile-mode', !!forceMobile);
+  document.body.classList.toggle('mobile-mode', !!forceMobile);
+}
+updateResponsiveMode();
+window.addEventListener('resize', updateResponsiveMode);
+window.addEventListener('orientationchange', updateResponsiveMode);
+
+// كاش
+function getUsersCache()    { try { return JSON.parse(sessionStorage.getItem('_uc') || '[]'); } catch(e) { return []; } }
+function getPatientsCache() { try { return JSON.parse(sessionStorage.getItem('_pc') || '[]'); } catch(e) { return []; } }
+function setUsersCache(d)    { sessionStorage.setItem('_uc', JSON.stringify(d)); }
+function setPatientsCache(d) { sessionStorage.setItem('_pc', JSON.stringify(d)); }
+
+function getEmpName(id) {
+  var arr = getUsersCache();
+  var f   = arr.find(function(x) { return x.EmpID === id; });
+  return f ? f.Name : (id || '—');
+}
+function getPatientName(id) {
+  var arr = getPatientsCache();
+  var f   = arr.find(function(x) { return x.PatientID === id; });
+  return f ? f.Name : (id || '—');
+}
+async function refreshCache() {
+  try {
+    var u = await getDB('users');
+    var p = await getDB('patients');
+    setUsersCache(u);
+    setPatientsCache(p);
+  } catch(e) {}
+}
+
+// =====================================================
+//  Auth
+// =====================================================
+function togglePassVis() {
+  var inp  = document.getElementById('loginPass');
+  var icon = document.getElementById('togglePassIcon');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    icon.className = 'fas fa-eye-slash';
+  } else {
+    inp.type = 'password';
+    icon.className = 'fas fa-eye';
+  }
+}
+
+async function doLogin() {
+  var u = (document.getElementById('loginUser').value || '').trim();
+  var p = (document.getElementById('loginPass').value || '').trim();
+  var errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+  if (!u || !p) {
+    document.getElementById('loginErrorMsg').textContent = 'يرجى إدخال اسم المستخدم وكلمة المرور';
+    errEl.style.display = 'block';
+    return;
+  }
+  var btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري التحقق...';
+  showLoading('جاري تسجيل الدخول...');
+  try {
+    var users = await getDB('users');
+    console.log('Loaded users from DB:', users);
+    var found = users.find(function(x) {
+      var userNameKey = Object.keys(x).find(function(k) { return k.toLowerCase() === 'username'; }) || 'UserName';
+      var passwordKey = Object.keys(x).find(function(k) { return k.toLowerCase() === 'password'; }) || 'Password';
+      var statusKey   = Object.keys(x).find(function(k) { return k.toLowerCase() === 'status'; })   || 'Status';
+      
+      var dbUser   = String(x[userNameKey] || '').trim().toLowerCase();
+      var dbPass   = String(x[passwordKey] || '').trim();
+      var dbStatus = String(x[statusKey] || '').trim().toLowerCase();
+      
+      return dbUser === u.toLowerCase() && dbPass === p && dbStatus === 'active';
+    });
+    console.log('Login attempt result:', { inputUser: u, foundUser: found });
+    if (!found) {
+      var dbDiag = "";
+      if (users.length === 0) {
+        dbDiag = " (جاري فحص حالة قاعدة البيانات...)";
+        google.script.run
+          .withSuccessHandler(function(diag) {
+            var diagStr = typeof diag === 'object' ? JSON.stringify(diag, null, 2) : diag;
+            document.getElementById('loginErrorMsg').innerHTML = 'بيانات الدخول غير صحيحة أو الحساب غير نشط.<br><pre style="text-align:left;font-size:10px;margin-top:10px;background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;overflow-x:auto;direction:ltr;">' + diagStr + '</pre>';
+          })
+          .withFailureHandler(function(err) {
+            var errStr = err ? (err.message + '\n' + err.stack) : 'فشل مجهول في خادم Google Apps Script';
+            document.getElementById('loginErrorMsg').innerHTML = 'بيانات الدخول غير صحيحة أو الحساب غير نشط.<br><pre style="text-align:left;font-size:10px;margin-top:10px;background:rgba(239,68,68,0.2);padding:8px;border-radius:4px;overflow-x:auto;direction:ltr;color:#fca5a5;">خطأ الخادم:\n' + errStr + '</pre>';
+          })
+          .debugDatabase();
+      }
+      document.getElementById('loginErrorMsg').innerHTML = 'بيانات الدخول غير صحيحة أو الحساب غير نشط.' + dbDiag;
+      errEl.style.display = 'block';
+      hideLoading();
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> تسجيل الدخول';
+      return;
+    }
+    currentUser = found;
+    sessionStorage.setItem('cfp_user', JSON.stringify(found));
+    setUsersCache(users);
+    var patients = await getDB('patients');
+    setPatientsCache(patients);
+    hideLoading();
+    showApp();
+  } catch(e) {
+    document.getElementById('loginErrorMsg').textContent = 'حدث خطأ في الاتصال، يرجى المحاولة مجدداً';
+    errEl.style.display = 'block';
+    hideLoading();
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> تسجيل الدخول';
+  }
+}
+
+function doLogout() {
+  currentUser = null;
+  sessionStorage.removeItem('cfp_user');
+  sessionStorage.removeItem('_uc');
+  sessionStorage.removeItem('_pc');
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('mainApp').style.display    = 'none';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').innerHTML = '<i class="fas fa-sign-in-alt"></i> تسجيل الدخول';
+}
+
+async function checkSession() {
+  var saved = sessionStorage.getItem('cfp_user');
+  if (saved) {
+    try {
+      currentUser = JSON.parse(saved);
+      showLoading('جاري استعادة الجلسة...');
+      var users    = await getDB('users');
+      var patients = await getDB('patients');
+      // تحقق أن المستخدم لا يزال نشطاً
+      var live = users.find(function(x) { return x.EmpID === currentUser.EmpID && x.Status === 'active'; });
+      if (!live) { doLogout(); hideLoading(); return; }
+      currentUser = live;
+      sessionStorage.setItem('cfp_user', JSON.stringify(live));
+      setUsersCache(users);
+      setPatientsCache(patients);
+      hideLoading();
+      showApp();
+    } catch(e) {
+      hideLoading();
+    }
+  }
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  var app = document.getElementById('mainApp');
+  app.style.display = 'flex';
+  // ملء بيانات المستخدم
+  document.getElementById('userName').textContent    = currentUser.Name;
+  document.getElementById('userRoleBadge').textContent = ROLE_NAMES[currentUser.Role] || currentUser.Role;
+  document.getElementById('userAvatar').textContent  = currentUser.Name.charAt(0);
+  buildSidebar();
+  // إظهار الـ bottom nav للموبايل
+  updateMobileBottomNav();
+  startMobileEnhancer();
+  navigateTo('dashboard');
+  startClock();
+  updateNotifBadge();
+}
+
+// تحديث الـ bottom nav حسب صلاحيات المستخدم وتفعيل الصفحة الحالية
+function updateMobileBottomNav() {
+  var nav = document.getElementById('mobileBottomNav');
+  if (!nav) return;
+  var allowed = ROLE_MENU[currentUser.Role] || ['dashboard'];
+  var preferred = ROLE_MOBILE_PRIMARY[currentUser.Role] || ['dashboard'];
+  var pages = preferred.filter(function(p) { return allowed.indexOf(p) !== -1; });
+  allowed.forEach(function(p) {
+    if (pages.length < 4 && pages.indexOf(p) === -1) pages.push(p);
+  });
+  pages = pages.slice(0, 4);
+  var html = pages.map(function(page) {
+    var item = MENU_ITEMS[page] || {};
+    return '<div class="mobile-nav-item" onclick="navigateTo(\'' + page + '\')" data-page="' + page + '">'
+      + '<i class="fas ' + (item.icon || 'fa-circle') + '"></i>'
+      + '<span>' + (item.label || page) + '</span>'
+      + '</div>';
+  }).join('');
+  html += '<div class="mobile-nav-item" onclick="toggleSidebar()" id="moreMenuBtn">'
+    + '<i class="fas fa-ellipsis-h"></i><span>المزيد</span></div>';
+  nav.innerHTML = html;
+  nav.style.display = '';
+}
+
+function syncBottomNav(page) {
+  var nav = document.getElementById('mobileBottomNav');
+  if (!nav) return;
+  nav.querySelectorAll('.mobile-nav-item').forEach(function(item) {
+    var p = item.getAttribute('data-page');
+    item.classList.toggle('active', p === page);
+  });
+}
+
+// =====================================================
+//  Navigation
+// =====================================================
+function buildSidebar() {
+  var nav     = document.getElementById('sidebarNav');
+  var allowed = ROLE_MENU[currentUser.Role] || ['dashboard'];
+  var groups  = {};
+  Object.keys(MENU_ITEMS).forEach(function(k) {
+    if (allowed.indexOf(k) === -1) return;
+    var m = MENU_ITEMS[k];
+    if (!groups[m.group]) groups[m.group] = [];
+    groups[m.group].push(k);
+  });
+  var html = '';
+  Object.keys(groups).forEach(function(g) {
+    html += '<div class="sidebar-group-label">' + g + '</div>';
+    groups[g].forEach(function(k) {
+      var m       = MENU_ITEMS[k];
+      var isActive = k === currentPage;
+      var extra   = '';
+      if (k === 'notifications' && window._unreadCount > 0) {
+        extra = '<span class="badge-notif">' + window._unreadCount + '</span>';
+      }
+      html += '<div class="sidebar-item' + (isActive ? ' active' : '') + '" onclick="navigateTo(\'' + k + '\'); closeSidebar();">'
+            + '<i class="fas ' + m.icon + '"></i>'
+            + '<span class="sidebar-label">' + m.label + '</span>'
+            + extra
+            + '</div>';
+    });
+  });
+  nav.innerHTML = html;
+}
+
+function closeSidebar() {
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebarOverlay');
+  if (sidebar) sidebar.classList.remove('mobile-open');
+  if (overlay) overlay.classList.remove('show');
+  document.body.classList.remove('sidebar-open');
+}
+
+function toggleSidebar() {
+  var sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  if (window.innerWidth <= 900) {
+    var isOpen = sidebar.classList.toggle('mobile-open');
+    var overlay = document.getElementById('sidebarOverlay');
+    if (overlay) overlay.classList.toggle('show', isOpen);
+    document.body.classList.toggle('sidebar-open', isOpen);
+  } else {
+    sidebar.classList.toggle('collapsed');
+    closeSidebar();
+  }
+}
+
+function handleSidebarResponsive() {
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebarOverlay');
+  if (!sidebar) return;
+  if (window.innerWidth > 900 && !document.documentElement.classList.contains('mobile-mode')) {
+    sidebar.classList.remove('mobile-open');
+    if (overlay) overlay.classList.remove('show');
+    document.body.classList.remove('sidebar-open');
+  }
+}
+
+window.addEventListener('resize', handleSidebarResponsive);
+
+var _navTimer = null;
+async function navigateTo(page) {
+  currentPage = page;
+  if (window.innerWidth <= 900 || document.documentElement.classList.contains('mobile-mode')) closeSidebar();
+  var mc = document.getElementById('mainContent');
+  document.getElementById('pageTitle').textContent = (MENU_ITEMS[page] || {}).label || '';
+  buildSidebar();
+  syncBottomNav(page);
+  mc.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:200px;">'
+               + '<div style="text-align:center;">'
+               + '<div class="spinner" style="margin:0 auto 12px;"></div>'
+               + '<p style="color:var(--muted);font-size:13px;">جاري التحميل...</p>'
+               + '</div></div>';
+  try {
+    var html = await renderPage(page);
+    mc.innerHTML = '<div class="fade-in">' + html + '</div>';
+    enhanceMobileTables(mc);
+    if (page === 'notifications') updateNotifBadge();
+  } catch(e) {
+    console.error('renderPage error:', e);
+    mc.innerHTML = '<div class="table-empty"><i class="fas fa-exclamation-circle text-danger"></i><p>حدث خطأ في التحميل</p></div>';
+  }
+}
+
+function enhanceMobileTables(root) {
+  root = root || document;
+  var tables = root.querySelectorAll('table');
+  tables.forEach(function(table) {
+    table.classList.add('mobile-card-table');
+    var headers = Array.prototype.map.call(table.querySelectorAll('thead th'), function(th) {
+      return (th.textContent || '').trim();
+    });
+    table.querySelectorAll('tbody tr').forEach(function(row) {
+      Array.prototype.forEach.call(row.children, function(td, idx) {
+        if (!td.getAttribute('data-label') && headers[idx]) {
+          td.setAttribute('data-label', headers[idx]);
+        }
+      });
+    });
+  });
+}
+
+function startMobileEnhancer() {
+  var targets = [document.getElementById('mainContent'), document.getElementById('modalBox')].filter(Boolean);
+  targets.forEach(function(target) {
+    if (target._mobileEnhancerStarted) return;
+    target._mobileEnhancerStarted = true;
+    var obs = new MutationObserver(function() {
+      enhanceMobileTables(target);
+    });
+    obs.observe(target, { childList: true, subtree: true });
+  });
+}
+
+async function renderPage(page) {
+  switch(page) {
+    case 'dashboard':    return await renderDashboard();
+    case 'patients':     return await renderPatients();
+    case 'patientslog':  return await renderPatientsLog();
+    case 'leads':        return await renderLeads();
+    case 'visits':       return await renderVisits();
+    case 'medical':      return await renderMedical();
+    case 'operations':   return await renderOperations();
+    case 'optimeline':   return await renderOPTimeline();
+    case 'marketing':    return await renderMarketing();
+    case 'inventory':    return await renderInventory();
+    case 'notifications':return await renderNotifications();
+    case 'users':        return await renderUsers();
+    default:             return '<p style="color:var(--muted);">الصفحة غير موجودة</p>';
+  }
+}
+
+// =====================================================
+//  Modal & Toast
+// =====================================================
+function openModal(title, content, size) {
+  var box = document.getElementById('modalBox');
+  box.className = 'modal-box' + (size === 'wide' ? ' wide' : size === 'narrow' ? ' narrow' : '');
+  box.innerHTML = '<div class="modal-header"><h3>' + title + '</h3>'
+    + '<button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button></div>'
+    + content;
+  enhanceMobileTables(box);
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+
+var _toastQ = [];
+function toast(msg, type) {
+  var c = document.getElementById('toastContainer');
+  var t = document.createElement('div');
+  type  = type || 'info';
+  t.className = 'toast toast-' + type;
+  var icons = { success: 'fa-check-circle', error: 'fa-times-circle', info: 'fa-info-circle', warning: 'fa-exclamation-triangle' };
+  t.innerHTML = '<i class="fas ' + (icons[type] || icons.info) + '"></i><span>' + msg + '</span>';
+  c.appendChild(t);
+  setTimeout(function() {
+    t.style.transition = 'all .3s';
+    t.style.opacity    = '0';
+    t.style.transform  = 'translateX(-30px)';
+    setTimeout(function() { t.remove(); }, 300);
+  }, 3500);
+}
+
+// =====================================================
+//  Helpers
+// =====================================================
+function statCard(icon, label, value, sub, bgColor, iconColor) {
+  return '<div class="stat-card">'
+    + '<div class="icon-wrap" style="background:' + bgColor + '"><i class="fas ' + icon + '" style="color:' + iconColor + ';font-size:18px;"></i></div>'
+    + '<div class="value">' + value + '</div>'
+    + '<div class="label">' + label + '</div>'
+    + (sub ? '<div class="sub">' + sub + '</div>' : '')
+    + '</div>';
+}
+
+function opStatusBadge(s) {
+  if (!s) return '<span class="badge badge-gray">—</span>';
+  var map = {
+    'مكتملة': 'badge-green',
+    'جارية':  'badge-blue',
+    'مجدولة': 'badge-yellow',
+    'ملغية':  'badge-red'
+  };
+  return '<span class="badge ' + (map[s] || 'badge-gray') + '">' + s + '</span>';
+}
+
+function visitStatusBadge(s) {
+  var map = { 'مؤكد': 'badge-green', 'معلق': 'badge-yellow', 'وصل': 'badge-blue', 'دخل للطبيب': 'badge-purple', 'ملغي': 'badge-red', 'مكتمل': 'badge-cyan' };
+  return '<span class="badge ' + (map[s] || 'badge-gray') + '">' + (s || '—') + '</span>';
+}
+
+function leadStatusBadge(s) {
+  var map = { 'FUP': 'badge-blue', 'RES': 'badge-green', 'LOST': 'badge-red' };
+  var lb  = { 'FUP': 'متابعة',    'RES': 'محول',        'LOST': 'فقدان' };
+  return '<span class="badge ' + (map[s] || 'badge-gray') + '">' + (lb[s] || s || '—') + '</span>';
+}
+
+function fmtCurrency(v) { return (parseFloat(v) || 0).toLocaleString('ar-EG') + ' ج'; }
+function fmtDate(v)     { return v ? String(v).split('T')[0] : '—'; }
+function nowDate()      { return new Date().toISOString().split('T')[0]; }
+function nowDateTime()  { return new Date().toISOString().replace('T',' ').substring(0,19); }
+
+// Clock
+function startClock() {
+  var el = document.getElementById('headerTime');
+  function tick() {
+    var n = new Date();
+    el.textContent = n.toLocaleDateString('ar-EG', { weekday:'short', year:'numeric', month:'short', day:'numeric' })
+                   + ' — ' + n.toLocaleTimeString('ar-EG', { hour:'2-digit', minute:'2-digit' });
+  }
+  tick();
+  setInterval(tick, 30000);
+}
+
+// =====================================================
+//  Notifications
+// =====================================================
+window._unreadCount = 0;
+
+async function addNotif(toRole, fromUser, message, refType, refId) {
+  try {
+    var data = await getDB('notifications');
+    var notif = {
+      NotifID:   await genID('N'),
+      ToRole:    toRole || '',
+      ToUser:    '',
+      FromUser:  fromUser || (currentUser ? currentUser.EmpID : ''),
+      Message:   message,
+      RefType:   refType || '',
+      RefID:     refId   || '',
+      IsRead:    'false',
+      CreatedAt: nowDateTime()
+    };
+    data.push(notif);
+    await setDB('notifications', data);
+  } catch(e) { console.error('addNotif error:', e); }
+}
+
+async function updateNotifBadge() {
+  try {
+    var data = await getDB('notifications');
+    var mine = data.filter(function(n) {
+      return (n.ToRole === currentUser.Role || n.ToUser === currentUser.EmpID) &&
+             String(n.IsRead) !== 'true';
+    });
+    window._unreadCount = mine.length;
+    var badge = document.getElementById('notifBadge');
+    if (mine.length > 0) {
+      badge.textContent = mine.length > 99 ? '99+' : mine.length;
+      badge.style.display = 'block';
+    } else {
+      badge.style.display = 'none';
+    }
+    buildSidebar();
+  } catch(e) {}
+}
+
+function toggleNotifPanel() {
+  document.getElementById('notifPanel').classList.toggle('open');
+  if (document.getElementById('notifPanel').classList.contains('open')) {
+    loadNotifPanel();
+  }
+}
+
+async function loadNotifPanel() {
+  var list = document.getElementById('notifList');
+  list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);"><i class="fas fa-spinner fa-spin"></i></div>';
+  var data = await getDB('notifications');
+  var mine = data.filter(function(n) {
+    return n.ToRole === currentUser.Role || n.ToUser === currentUser.EmpID || n.ToRole === 'ALL';
+  }).slice(-30).reverse();
+  if (mine.length === 0) {
+    list.innerHTML = '<div class="table-empty" style="padding:30px;"><i class="fas fa-bell-slash"></i><p>لا توجد إشعارات</p></div>';
+    return;
+  }
+  var iconMap = { Lead:'fa-funnel-dollar', Operation:'fa-procedures', Visit:'fa-calendar-check', Patient:'fa-user-injured' };
+  var colorMap = { Lead:'rgba(245,158,11,.15)', Operation:'rgba(59,130,246,.15)', Visit:'rgba(16,185,129,.15)', Patient:'rgba(168,85,247,.15)' };
+  var iconCl   = { Lead:'#F59E0B', Operation:'#60A5FA', Visit:'#10B981', Patient:'#A855F7' };
+  list.innerHTML = mine.map(function(n) {
+    var isUnread = String(n.IsRead) !== 'true';
+    var ic  = iconMap[n.RefType]  || 'fa-bell';
+    var bg  = colorMap[n.RefType] || 'rgba(100,116,139,.15)';
+    var col = iconCl[n.RefType]   || '#94A3B8';
+    return '<div class="notif-item' + (isUnread ? ' unread' : '') + '" onclick="readNotif(\'' + n.NotifID + '\')">'
+         + (isUnread ? '<span style="width:7px;height:7px;border-radius:50%;background:var(--brand);flex-shrink:0;margin-top:5px;"></span>' : '')
+         + '<div class="notif-icon" style="background:' + bg + ';color:' + col + ';">'
+         + '<i class="fas ' + ic + '"></i></div>'
+         + '<div class="notif-text">'
+         + '<p>' + n.Message + '</p>'
+         + '<small>بواسطة: ' + getEmpName(n.FromUser) + ' — ' + fmtDate(n.CreatedAt) + '</small>'
+         + '</div></div>';
+  }).join('');
+}
+
+async function readNotif(id) {
+  var data = await getDB('notifications');
+  var idx  = data.findIndex(function(x) { return x.NotifID === id; });
+  if (idx > -1) { data[idx].IsRead = 'true'; await setDB('notifications', data); }
+  updateNotifBadge();
+  loadNotifPanel();
+}
+
+async function markAllRead() {
+  var data = await getDB('notifications');
+  data.forEach(function(n) {
+    if (n.ToRole === currentUser.Role || n.ToUser === currentUser.EmpID || n.ToRole === 'ALL') {
+      n.IsRead = 'true';
+    }
+  });
+  await setDB('notifications', data);
+  updateNotifBadge();
+  loadNotifPanel();
+}
+
+function getPreferredTheme() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+  const normalized = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', normalized);
+  localStorage.setItem('theme', normalized);
+  updateThemeIcon(normalized);
+}
+
+function initializeTheme() {
+  const savedTheme = localStorage.getItem('theme');
+  const theme = savedTheme || getPreferredTheme();
+  applyTheme(theme);
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme);
+}
+
+function updateThemeIcon(theme) {
+  const btn = document.getElementById('themeToggleBtn');
+  if (!btn) return;
+  if (theme === 'light') {
+    btn.innerHTML = '<i class="fas fa-moon text-lg"></i>';
+    btn.title = 'الوضع الليلي';
+    btn.setAttribute('aria-label', 'التبديل إلى الوضع الداكن');
+  } else {
+    btn.innerHTML = '<i class="fas fa-sun text-lg"></i>';
+    btn.title = 'الوضع النهاري';
+    btn.setAttribute('aria-label', 'التبديل إلى الوضع الفاتح');
+  }
+}
+</script>

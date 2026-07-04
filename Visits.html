@@ -1,0 +1,493 @@
+﻿<script>
+/* =========================================================
+   Visits.html — Visits / Bookings Management Module
+   HairCare Pro ERP
+   ========================================================= */
+
+let _visitsData     = [];
+let _visitsFiltered = [];
+let _visitPatients  = [];
+let _visitDoctors   = [];
+
+/* ─── Entry Point ─────────────────────────────────────── */
+async function renderVisits() {
+  if (!canDo('visits', 'r')) {
+    return `<div class="perm-denied"><i class="fa fa-lock"></i><p>ليس لديك صلاحية لعرض هذه الصفحة.</p></div>`;
+  }
+
+  showLoading('جارٍ تحميل الحجوزات…');
+  try {
+    const [visits, patients, users] = await Promise.all([
+      getDB('visits'), getDB('patients'), getDB('users')
+    ]);
+    _visitsData     = Array.isArray(visits)   ? visits   : [];
+    _visitPatients  = Array.isArray(patients) ? patients : [];
+    _visitDoctors   = Array.isArray(users)    ? users.filter(u => u.Role === 'DOC_SUP' && u.Status === 'active') : [];
+    _visitsFiltered = [..._visitsData];
+  } catch (e) {
+    hideLoading();
+    toast('فشل تحميل البيانات', 'error');
+    return `<div class="table-empty"><i class="fa fa-exclamation-triangle"></i><p>فشل تحميل البيانات</p></div>`;
+  }
+  hideLoading();
+  return _renderVisitsPage();
+}
+
+function _renderVisitsPage() {
+  const totalRev  = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.TotalAmount)     || 0), 0);
+  const totalPaid = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.PaidAmount)      || 0), 0);
+  const totalRem  = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.RemainingAmount) || 0), 0);
+
+  const addBtn = canDo('visits', 'c')
+    ? `<button class="btn-primary" onclick="openVisitForm()"><i class="fa fa-plus"></i> إضافة حجز</button>`
+    : '';
+
+  const html = `
+<div class="fade-in">
+  <!-- Financial Summary -->
+  <div class="grid-3" style="margin-bottom:20px;">
+    ${statCard('fa-coins',         'إجمالي الإيرادات', fmtCurrency(totalRev),  _visitsFiltered.length + ' حجز', '#6c63ff', '#fff')}
+    ${statCard('fa-check-double',  'إجمالي المدفوع',   fmtCurrency(totalPaid), 'مدفوع',    '#10b981', '#fff')}
+    ${statCard('fa-hourglass-half','المتبقي للتحصيل',  fmtCurrency(totalRem),  'مستحق',    '#ef4444', '#fff')}
+  </div>
+
+  <!-- Filters & Actions -->
+  <div class="section-header">
+    <span style="font-size:1.1rem;font-weight:700;"><i class="fa fa-calendar-check text-brand"></i> الحجوزات والزيارات</span>
+    ${addBtn}
+  </div>
+  <div class="filter-bar">
+    <input  class="input-field" id="vis-search"  type="text"  placeholder="بحث بالاسم أو الرقم…"  oninput="filterVisits()" style="max-width:240px;">
+    <input  class="input-field" id="vis-date-from" type="date" onchange="filterVisits()" title="من تاريخ">
+    <input  class="input-field" id="vis-date-to"   type="date" onchange="filterVisits()" title="إلى تاريخ">
+    <select class="input-field" id="vis-status" onchange="filterVisits()" style="max-width:160px;">
+      <option value="">كل الحالات</option>
+      <option value="معلق">معلق</option>
+      <option value="مؤكد">مؤكد</option>
+      <option value="وصل">وصل</option>
+      <option value="دخل للطبيب">دخل للطبيب</option>
+      <option value="مكتمل">مكتمل</option>
+      <option value="ملغي">ملغي</option>
+    </select>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <div class="table-inner">
+      <table id="visits-table">
+        <thead>
+          <tr>
+            <th>الرقم</th>
+            <th>المريض</th>
+            <th>الطبيب</th>
+            <th>الإجراء</th>
+            <th>تاريخ الحجز</th>
+            <th>الإجمالي</th>
+            <th>المدفوع</th>
+            <th>المتبقي</th>
+            <th>طريقة الدفع</th>
+            <th>الحالة</th>
+            <th>إجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="visits-tbody"></tbody>
+      </table>
+      <div id="visits-empty" class="table-empty" style="display:none;">
+        <i class="fa fa-inbox"></i><p>لا توجد حجوزات مطابقة.</p>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+  setTimeout(() => _renderVisitsRows(_visitsFiltered), 0);
+  return html;
+}
+
+function _renderVisitsRows(data) {
+  const tbody = document.getElementById('visits-tbody');
+  const empty = document.getElementById('visits-empty');
+  if (!tbody || !empty) return;
+  if (!data.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = data.map(v => {
+    const rem = (parseFloat(v.RemainingAmount) || 0);
+    const remStyle = rem > 0 ? 'color:#ef4444;font-weight:700;' : 'color:#10b981;font-weight:700;';
+
+    const editBtn = canDo('visits', 'u')
+      ? `<button class="btn-icon btn-icon-blue"   title="تعديل"      onclick="openVisitForm('${v.VisitID}')"><i class="fa fa-edit"></i></button>`
+      : '';
+    const payBtn = (currentUser.Role === 'ACC_SUP')
+      ? `<button class="btn-icon btn-icon-brand"  title="تحديث الدفع" onclick="openVisitPayment('${v.VisitID}')"><i class="fa fa-money-bill-wave"></i></button>`
+      : '';
+    const arrivalBtn = (currentUser.Role === 'REC_SUP' && (v.Status === 'مؤكد' || v.Status === 'معلق'))
+      ? `<button class="btn-icon btn-icon-brand" title="تسجيل وصول" onclick="quickVisitStatus('${v.VisitID}','وصل')"><i class="fa fa-door-open"></i></button>`
+      : '';
+    const doctorBtn = (currentUser.Role === 'REC_SUP' && v.Status === 'وصل')
+      ? `<button class="btn-icon btn-icon-blue" title="إدخال للطبيب" onclick="quickVisitStatus('${v.VisitID}','دخل للطبيب')"><i class="fa fa-user-md"></i></button>`
+      : '';
+    const delBtn = canDo('visits', 'd')
+      ? `<button class="btn-icon btn-icon-red"    title="حذف"        onclick="deleteVisit('${v.VisitID}')"><i class="fa fa-trash"></i></button>`
+      : '';
+
+    return `
+<tr>
+  <td class="font-mono text-muted" style="font-size:.78rem;">${v.VisitID}</td>
+  <td style="font-weight:600;">${v.PatientName || getPatientName(v.PatientID) || '—'}</td>
+  <td>${v.DoctorName || getEmpName(v.DoctorID) || '—'}</td>
+  <td class="truncate" style="max-width:130px;" title="${v.ProcedureName || ''}">${v.ProcedureName || '—'}</td>
+  <td>${fmtDate(v.BookingDate) || '—'}</td>
+  <td class="font-mono">${fmtCurrency(v.TotalAmount     || 0)}</td>
+  <td class="font-mono">${fmtCurrency(v.PaidAmount      || 0)}</td>
+  <td class="font-mono" style="${remStyle}">${fmtCurrency(rem)}</td>
+  <td>${v.PaymentMethod || '—'}</td>
+  <td>${visitStatusBadge(v.Status)}</td>
+  <td style="white-space:nowrap;">${editBtn}${arrivalBtn}${doctorBtn}${payBtn}${delBtn}</td>
+</tr>`;
+  }).join('');
+}
+
+async function quickVisitStatus(id, status) {
+  if (currentUser.Role !== 'REC_SUP' && !canDo('visits', 'u')) {
+    toast('لا تملك صلاحية تحديث حالة الزيارة', 'error');
+    return;
+  }
+  showLoading('جارٍ تحديث حالة الزيارة…');
+  try {
+    _visitsData = await getDB('visits') || [];
+    const idx = _visitsData.findIndex(v => v.VisitID === id);
+    if (idx === -1) { toast('الحجز غير موجود', 'error'); return; }
+    _visitsData[idx].Status = status;
+    await setDB('visits', _visitsData);
+    if (status === 'دخل للطبيب') {
+      await addNotif('DOC_SUP', currentUser.EmpID, `المريض ${_visitsData[idx].PatientName || getPatientName(_visitsData[idx].PatientID)} دخل للطبيب`, 'Visit', id);
+    }
+    _visitsFiltered = [..._visitsData];
+    _renderVisitsPage();
+    toast('تم تحديث الحالة', 'success');
+  } catch (e) {
+    console.error('quickVisitStatus error:', e);
+    toast('حدث خطأ أثناء تحديث الحالة', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+/* ─── Filter ──────────────────────────────────────────── */
+function filterVisits() {
+  const q       = (document.getElementById('vis-search').value    || '').trim().toLowerCase();
+  const dateFrom = document.getElementById('vis-date-from').value || '';
+  const dateTo   = document.getElementById('vis-date-to').value   || '';
+  const status   = document.getElementById('vis-status').value    || '';
+
+  _visitsFiltered = _visitsData.filter(v => {
+    const name     = (v.PatientName || getPatientName(v.PatientID) || '').toLowerCase();
+    const matchQ   = !q      || name.includes(q) || (v.VisitID || '').toLowerCase().includes(q)
+                              || (v.ProcedureName || '').toLowerCase().includes(q);
+    const matchSt  = !status || v.Status === status;
+    const bd       = v.BookingDate || '';
+    const matchDF  = !dateFrom || bd >= dateFrom;
+    const matchDT  = !dateTo   || bd <= dateTo;
+    return matchQ && matchSt && matchDF && matchDT;
+  });
+
+  _renderVisitsRows(_visitsFiltered);
+
+  // Update financial summary cards
+  const totalRev  = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.TotalAmount)     || 0), 0);
+  const totalPaid = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.PaidAmount)      || 0), 0);
+  const totalRem  = _visitsFiltered.reduce((s, v) => s + (parseFloat(v.RemainingAmount) || 0), 0);
+  const kpiVals   = document.querySelectorAll('.stat-card .value');
+  if (kpiVals.length >= 3) {
+    kpiVals[0].textContent = fmtCurrency(totalRev);
+    kpiVals[1].textContent = fmtCurrency(totalPaid);
+    kpiVals[2].textContent = fmtCurrency(totalRem);
+  }
+}
+
+/* ─── Open Visit Form ─────────────────────────────────── */
+async function openVisitForm(id) {
+  const isEdit = !!id;
+  const visit  = isEdit ? _visitsData.find(v => v.VisitID === id) : {};
+  if (!visit && isEdit) { toast('لم يُعثر على الحجز', 'error'); return; }
+
+  const canSave = canDo('visits', isEdit ? 'u' : 'c');
+  const dis     = canSave ? '' : 'disabled';
+
+  const patOpts = _visitPatients.map(p =>
+    `<option value="${p.PatientID}" data-name="${p.Name}" ${(visit.PatientID === p.PatientID) ? 'selected' : ''}>${p.Name} — ${p.Phone || ''}</option>`
+  ).join('');
+
+  const docOpts = _visitDoctors.map(d =>
+    `<option value="${d.EmpID}" data-name="${d.Name}" ${(visit.DoctorID === d.EmpID) ? 'selected' : ''}>${d.Name}</option>`
+  ).join('');
+
+  const saveBtn = canSave
+    ? `<button class="btn-primary" onclick="saveVisit('${id || ''}')"><i class="fa fa-save"></i> حفظ</button>`
+    : '';
+
+  const form = `
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">المريض *</label>
+    <select class="input-field" id="vf-patient" ${dis}>
+      <option value="">اختر المريض</option>
+      ${patOpts}
+    </select>
+  </div>
+  <div class="form-group">
+    <label class="form-label">الطبيب</label>
+    <select class="input-field" id="vf-doctor" ${dis}>
+      <option value="">اختر الطبيب</option>
+      ${docOpts}
+    </select>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">الإجراء / الخدمة</label>
+    <input class="input-field" id="vf-procedure" type="text"
+      value="${visit.ProcedureName || ''}"
+      placeholder="زراعة شعر / تطعيم / PRP…" ${dis}>
+  </div>
+  <div class="form-group">
+    <label class="form-label">تاريخ الحجز *</label>
+    <input class="input-field" id="vf-date" type="date" value="${visit.BookingDate || nowDate()}" ${dis}>
+  </div>
+</div>
+<div class="grid-3">
+  <div class="form-group">
+    <label class="form-label">الإجمالي (ج)</label>
+    <input class="input-field" id="vf-total"  type="number" min="0"
+      value="${visit.TotalAmount     || ''}" placeholder="0"
+      oninput="calcVisitRem()" ${dis}>
+  </div>
+  <div class="form-group">
+    <label class="form-label">المدفوع (ج)</label>
+    <input class="input-field" id="vf-paid"   type="number" min="0"
+      value="${visit.PaidAmount      || ''}" placeholder="0"
+      oninput="calcVisitRem()" ${dis}>
+  </div>
+  <div class="form-group">
+    <label class="form-label">المتبقي (ج)</label>
+    <input class="input-field" id="vf-rem"    type="number" min="0"
+      value="${visit.RemainingAmount || ''}" placeholder="0" readonly
+      style="background:var(--bg-secondary,#f4f4f8);cursor:not-allowed;">
+  </div>
+</div>
+<div class="grid-2">
+  <div class="form-group">
+    <label class="form-label">طريقة الدفع</label>
+    <select class="input-field" id="vf-paymethod" ${dis}>
+      <option value="">اختر الطريقة</option>
+      ${['نقدي','بطاقة','تحويل بنكي','تقسيط','شيك'].map(m =>
+        `<option value="${m}" ${visit.PaymentMethod === m ? 'selected' : ''}>${m}</option>`).join('')}
+    </select>
+  </div>
+  <div class="form-group">
+    <label class="form-label">الحالة</label>
+    <select class="input-field" id="vf-status" ${dis}>
+      ${['معلق','مؤكد','وصل','دخل للطبيب','ملغي','مكتمل'].map(s =>
+        `<option value="${s}" ${visit.Status === s ? 'selected' : ''}>${s}</option>`).join('')}
+    </select>
+  </div>
+</div>
+<div class="form-group">
+  <label class="form-label">ملاحظات</label>
+  <textarea class="input-field" id="vf-notes" rows="3" placeholder="أي ملاحظات…" ${dis}>${visit.Notes || ''}</textarea>
+</div>
+<div class="modal-footer">
+  ${saveBtn}
+  <button class="btn-secondary" onclick="closeModal()">إغلاق</button>
+</div>`;
+
+  openModal(isEdit ? `تعديل حجز — ${visit.PatientName || id}` : 'إضافة حجز جديد', form, 'wide');
+}
+
+/* ─── Auto-calculate Remaining ───────────────────────── */
+function calcVisitRem() {
+  const total = parseFloat(document.getElementById('vf-total').value) || 0;
+  const paid  = parseFloat(document.getElementById('vf-paid').value)  || 0;
+  const rem   = Math.max(0, total - paid);
+  document.getElementById('vf-rem').value = rem.toFixed(2);
+}
+
+/* ─── Save Visit ──────────────────────────────────────── */
+async function saveVisit(id) {
+  const isEdit = !!id;
+  if (!canDo('visits', isEdit ? 'u' : 'c')) { toast('لا تملك الصلاحية', 'error'); return; }
+
+  const patSel    = document.getElementById('vf-patient');
+  const patientID = patSel.value;
+  const patientName = patSel.options[patSel.selectedIndex]
+                        ? patSel.options[patSel.selectedIndex].dataset.name || patSel.options[patSel.selectedIndex].text.split('—')[0].trim()
+                        : '';
+  const docSel    = document.getElementById('vf-doctor');
+  const doctorID  = docSel.value;
+  const doctorName = docSel.options[docSel.selectedIndex]
+                       ? docSel.options[docSel.selectedIndex].text
+                       : '';
+  const procedure = document.getElementById('vf-procedure').value.trim();
+  const bookDate  = document.getElementById('vf-date').value;
+  const total     = parseFloat(document.getElementById('vf-total').value)  || 0;
+  const paid      = parseFloat(document.getElementById('vf-paid').value)   || 0;
+  const rem       = Math.max(0, total - paid);
+  const payMethod = document.getElementById('vf-paymethod').value;
+  const status    = document.getElementById('vf-status').value;
+  const notes     = document.getElementById('vf-notes').value.trim();
+
+  if (!patientID) { toast('يرجى اختيار المريض', 'error'); return; }
+  if (!bookDate)  { toast('تاريخ الحجز مطلوب',  'error'); return; }
+
+  showLoading('جارٍ الحفظ…');
+  try {
+    _visitsData = await getDB('visits') || [];
+
+    if (isEdit) {
+      const idx = _visitsData.findIndex(v => v.VisitID === id);
+      if (idx === -1) { hideLoading(); toast('الحجز غير موجود', 'error'); return; }
+      _visitsData[idx] = {
+        ..._visitsData[idx],
+        PatientID: patientID, PatientName: patientName,
+        DoctorID: doctorID,   DoctorName:  doctorName,
+        ProcedureName: procedure, BookingDate: bookDate,
+        TotalAmount: total, PaidAmount: paid, RemainingAmount: rem,
+        PaymentMethod: payMethod, Status: status, Notes: notes
+      };
+      toast('تم تحديث الحجز ✓', 'success');
+    } else {
+      const newID = await genID('V');
+      _visitsData.push({
+        VisitID: newID,
+        PatientID: patientID, PatientName: patientName,
+        TransformedFrom: '',
+        EmpID: currentUser.EmpID,
+        DoctorID: doctorID,   DoctorName:  doctorName,
+        ProcedureName: procedure, BookingDate: bookDate,
+        TotalAmount: total, PaidAmount: paid, RemainingAmount: rem,
+        PaymentMethod: payMethod,
+        AccID: '', AccName: '',
+        Status: status || 'معلق',
+        Notes: notes
+      });
+      toast('تمت إضافة الحجز ✓', 'success');
+    }
+
+    await setDB('visits', _visitsData);
+    hideLoading();
+    closeModal();
+    _visitsFiltered = [..._visitsData];
+    _renderVisitsPage();
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  }
+}
+
+/* ─── Delete Visit ────────────────────────────────────── */
+async function deleteVisit(id) {
+  if (!canDo('visits', 'd')) { toast('لا تملك صلاحية الحذف', 'error'); return; }
+  const visit = _visitsData.find(v => v.VisitID === id);
+  if (!confirm(`هل تريد حذف حجز "${visit ? (visit.PatientName || id) : id}" نهائيًا؟`)) return;
+
+  showLoading('جارٍ الحذف…');
+  try {
+    _visitsData = _visitsData.filter(v => v.VisitID !== id);
+    await setDB('visits', _visitsData);
+    hideLoading();
+    _visitsFiltered = [..._visitsData];
+    _renderVisitsPage();
+    toast('تم الحذف بنجاح', 'success');
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء الحذف', 'error');
+  }
+}
+
+/* ─── Payment Update Modal (ACC_SUP) ─────────────────── */
+async function openVisitPayment(id) {
+  if (currentUser.Role !== 'ACC_SUP' && !canDo('visits','u')) {
+    toast('لا تملك صلاحية تحديث الدفع', 'error');
+    return;
+  }
+  const visit = _visitsData.find(v => v.VisitID === id);
+  if (!visit) { toast('لم يُعثر على الحجز', 'error'); return; }
+
+  const form = `
+<div class="info-box" style="margin-bottom:14px;">
+  <div style="font-size:.92rem;line-height:1.9;">
+    <div><strong>المريض:</strong>  ${visit.PatientName || getPatientName(visit.PatientID) || '—'}</div>
+    <div><strong>الإجراء:</strong> ${visit.ProcedureName || '—'}</div>
+    <div><strong>الإجمالي:</strong> <span class="font-mono">${fmtCurrency(visit.TotalAmount || 0)}</span></div>
+    <div><strong>المدفوع حالياً:</strong> <span class="font-mono text-brand">${fmtCurrency(visit.PaidAmount || 0)}</span></div>
+    <div><strong>المتبقي:</strong> <span class="font-mono text-danger">${fmtCurrency(visit.RemainingAmount || 0)}</span></div>
+  </div>
+</div>
+<div class="form-group">
+  <label class="form-label">المبلغ المدفوع الجديد (ج) *</label>
+  <input class="input-field" id="pay-amount" type="number" min="0"
+    max="${visit.TotalAmount || 999999}"
+    value="${visit.PaidAmount || ''}" placeholder="0" oninput="calcPayRemPreview(${visit.TotalAmount || 0})">
+</div>
+<div class="form-group">
+  <label class="form-label">طريقة الدفع</label>
+  <select class="input-field" id="pay-method">
+    ${['نقدي','بطاقة','تحويل بنكي','تقسيط','شيك'].map(m =>
+      `<option value="${m}" ${visit.PaymentMethod === m ? 'selected' : ''}>${m}</option>`).join('')}
+  </select>
+</div>
+<div class="form-group">
+  <label class="form-label">المتبقي بعد التحديث</label>
+  <input class="input-field" id="pay-rem-preview" type="number" readonly
+    value="${Math.max(0,(visit.TotalAmount||0)-(visit.PaidAmount||0)).toFixed(2)}"
+    style="background:var(--bg-secondary,#f4f4f8);cursor:not-allowed;">
+</div>
+<div class="modal-footer">
+  <button class="btn-primary" onclick="saveVisitPayment('${id}')"><i class="fa fa-save"></i> تحديث الدفع</button>
+  <button class="btn-secondary" onclick="closeModal()">إغلاق</button>
+</div>`;
+
+  openModal(`تحديث الدفع — ${visit.PatientName || id}`, form, 'narrow');
+}
+
+/* helper for payment preview */
+function calcPayRemPreview(total) {
+  const paid = parseFloat(document.getElementById('pay-amount').value) || 0;
+  const rem  = Math.max(0, (total || 0) - paid);
+  document.getElementById('pay-rem-preview').value = rem.toFixed(2);
+}
+
+/* Save payment update */
+async function saveVisitPayment(id) {
+  const paid      = parseFloat(document.getElementById('pay-amount').value)  || 0;
+  const payMethod = document.getElementById('pay-method').value;
+
+  showLoading('جارٍ تحديث الدفع…');
+  try {
+    _visitsData = await getDB('visits') || [];
+    const idx   = _visitsData.findIndex(v => v.VisitID === id);
+    if (idx === -1) { hideLoading(); toast('الحجز غير موجود', 'error'); return; }
+
+    const total = parseFloat(_visitsData[idx].TotalAmount) || 0;
+    const rem   = Math.max(0, total - paid);
+    _visitsData[idx].PaidAmount      = paid;
+    _visitsData[idx].RemainingAmount = rem;
+    _visitsData[idx].PaymentMethod   = payMethod;
+    if (rem === 0) _visitsData[idx].Status = 'مكتمل';
+
+    await setDB('visits', _visitsData);
+    hideLoading();
+    closeModal();
+    _visitsFiltered = [..._visitsData];
+    _renderVisitsPage();
+    toast('تم تحديث بيانات الدفع ✓', 'success');
+  } catch (e) {
+    hideLoading();
+    toast('حدث خطأ أثناء التحديث', 'error');
+  }
+}
+</script>

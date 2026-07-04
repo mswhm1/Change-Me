@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>Change Me Clinics</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<script>
+// تهيئة السمة فوراً لمنع وميض الصفحة
+function initTheme() {
+  const uaMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent || '');
+  const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const shortSide = Math.min(screen.width || innerWidth, screen.height || innerHeight);
+  if (innerWidth <= 980 || uaMobile || (isTouch && shortSide <= 900)) {
+    document.documentElement.classList.add('mobile-mode');
+    document.documentElement.setAttribute('data-initial-mobile', 'true');
+  }
+  if (window.initializeTheme) {
+    window.initializeTheme();
+  } else {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  }
+}
+initTheme();
+</script>
+<?!= include('Styles') ?>
+</head>
+<body>
+
+<!-- شاشة الدخول -->
+<div id="loginScreen" class="login-bg fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-6">
+  <div class="relative z-10 w-full max-w-md px-0 sm:px-2">
+    <div class="text-center mb-10">
+      <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-brand/20 to-brand/5 border border-brand/20 mb-5">
+        <i class="fas fa-clinic-medical text-3xl text-brand"></i>
+      </div>
+      <h1 class="text-3xl font-bold text-white mb-2">Change Me Clinics</h1>
+      <p class="text-muted text-sm">نظام إدارة العيادات والعمليات المتكامل</p>
+    </div>
+    <div class="bg-card/80 backdrop-blur-xl border border-border rounded-2xl p-6 sm:p-8">
+      <div class="mb-5">
+        <label class="block text-sm text-muted mb-2">اسم المستخدم</label>
+        <div class="relative">
+          <i class="fas fa-user absolute top-1/2 -translate-y-1/2 right-4 text-muted text-sm"></i>
+          <input id="loginUser" type="text" class="input-field pr-11" placeholder="أدخل اسم المستخدم">
+        </div>
+      </div>
+      <div class="mb-6">
+        <label class="block text-sm text-muted mb-2">كلمة المرور</label>
+        <div class="relative">
+          <i class="fas fa-lock absolute top-1/2 -translate-y-1/2 right-4 text-muted text-sm"></i>
+          <input id="loginPass" type="password" class="input-field pr-11 pl-11" placeholder="أدخل كلمة المرور" onkeydown="if(event.key==='Enter')doLogin()">
+          <button type="button" onclick="togglePassVis()" class="absolute top-1/2 -translate-y-1/2 left-4 text-muted hover:text-white">
+            <i id="togglePassIcon" class="fas fa-eye"></i>
+          </button>
+        </div>
+      </div>
+      <button id="loginBtn" onclick="doLogin()" class="btn-primary w-full justify-center py-3 text-base">
+        <i class="fas fa-sign-in-alt"></i> تسجيل الدخول
+      </button>
+      <div id="loginError" class="mt-4 text-center text-red-400 text-sm" style="display: none;">
+        <span id="loginErrorMsg">بيانات الدخول غير صحيحة</span>
+      </div>
+    </div>
+    <div class="mt-6 text-center text-xs text-muted/50">admin/12345 | mostafa/12345 | amira/12345</div>
+  </div>
+</div>
+
+<!-- التطبيق -->
+<div id="mainApp" class="hidden min-h-screen w-full flex">
+  <aside id="sidebar" class="w-64 bg-surface border-l border-border flex flex-col flex-shrink-0 h-screen overflow-y-auto">
+    <div class="p-5 border-b border-border">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-brand/20 to-brand/5 border border-brand/20 flex items-center justify-center">
+          <i class="fas fa-clinic-medical text-brand"></i>
+        </div>
+        <div>
+          <h2 class="text-white font-bold text-sm">Change Me</h2>
+          <span class="text-xs text-muted">Clinics System</span>
+        </div>
+      </div>
+    </div>
+    <nav id="sidebarNav" class="flex-1 p-3 space-y-1"></nav>
+    <div class="p-4 border-t border-border">
+      <div class="flex items-center gap-3 mb-3">
+        <div id="userAvatar" class="w-9 h-9 rounded-full bg-brand/20 flex items-center justify-center text-brand font-bold text-sm"></div>
+        <div class="flex-1 min-w-0">
+          <div id="userName" class="text-white text-sm font-semibold truncate"></div>
+          <div id="userRoleBadge" class="text-muted text-xs truncate"></div>
+        </div>
+      </div>
+      <button onclick="doLogout()" class="btn-secondary w-full justify-center text-xs py-2">
+        <i class="fas fa-sign-out-alt"></i> تسجيل خروج
+      </button>
+    </div>
+  </aside>
+
+  <div class="flex-1 flex flex-col min-w-0 h-screen">
+    <header id="appHeader" class="h-16 bg-surface border-b border-border flex items-center justify-between px-6 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button onclick="toggleSidebar()" id="menuToggleBtn" class="menu-toggle-btn text-muted hover:text-white p-2" title="القائمة">
+          <i class="fas fa-bars text-xl"></i>
+        </button>
+        <h1 id="pageTitle" class="text-white font-bold text-lg"></h1>
+      </div>
+      <div class="flex items-center gap-4">
+        <button id="themeToggleBtn" onclick="toggleTheme()" class="text-muted hover:text-white p-2">
+          <i class="fas fa-sun text-lg"></i>
+        </button>
+        <div class="relative">
+          <button onclick="toggleNotifPanel()" class="text-muted hover:text-white p-2 relative">
+            <i class="fas fa-bell text-lg"></i>
+            <span id="notifBadge" class="hidden absolute -top-0 -left-0 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold"></span>
+          </button>
+        </div>
+        <div id="headerTime" class="text-muted text-sm"></div>
+      </div>
+    </header>
+    <main id="mainContent" class="flex-1 overflow-y-auto p-6"></main>
+  </div>
+</div>
+
+<div id="sidebarOverlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
+
+<!-- مودال -->
+<div id="modalOverlay" class="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div id="modalBox" class="modal-box"></div>
+</div>
+
+<!-- توست -->
+<div id="toastContainer" class="toast-container"></div>
+
+<!-- لوحة إشعارات -->
+<div id="notifPanel" class="notif-panel">
+  <div class="notif-header">
+    <h3 class="text-white font-bold">الإشعارات</h3>
+    <button onclick="markAllRead()" class="text-xs text-brand hover:underline">تعيين الكل كمقروء</button>
+  </div>
+  <div id="notifList" class="overflow-y-auto max-h-[60vh]"></div>
+</div>
+
+<!-- لودينج -->
+<div id="loadingOverlay" class="loading-overlay" style="display: none;">
+  <div class="spinner"></div>
+  <p>جاري التحميل...</p>
+</div>
+
+<!-- Bottom Navigation (Mobie) -->
+<nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;">
+  <div class="mobile-nav-item active" onclick="navigateTo('dashboard')" data-page="dashboard">
+    <i class="fas fa-chart-line"></i>
+    <span>الرئيسية</span>
+  </div>
+  <div class="mobile-nav-item" onclick="navigateTo('patients')" data-page="patients">
+    <i class="fas fa-users"></i>
+    <span>المرضى</span>
+  </div>
+  <div class="mobile-nav-item" onclick="navigateTo('visits')" data-page="visits">
+    <i class="fas fa-calendar-check"></i>
+    <span>الزيارات</span>
+  </div>
+  <div class="mobile-nav-item" onclick="navigateTo('operations')" data-page="operations">
+    <i class="fas fa-procedures"></i>
+    <span>العمليات</span>
+  </div>
+  <div class="mobile-nav-item" onclick="toggleSidebar()" id="moreMenuBtn">
+    <i class="fas fa-ellipsis-h"></i>
+    <span>المزيد</span>
+  </div>
+</nav>
+
+<!-- تضمين الملفات الجزئية -->
+<?!= include('CoreJS') ?>
+<?!= include('Dashboard') ?>
+<?!= include('Patients') ?>
+<?!= include('PatientsLog') ?>
+<?!= include('Leads') ?>
+<?!= include('Visits') ?>
+<?!= include('Medical') ?>
+<?!= include('Operations') ?>
+<?!= include('OPTimeline') ?>
+<?!= include('Marketing') ?>
+<?!= include('Inventory') ?>
+<?!= include('Notifications') ?>
+<?!= include('Users') ?>
+
+<script>
+// تهيئة وحالة السمة عند تحميل الصفحة بالكامل
+window.addEventListener('DOMContentLoaded', function() {
+  initializeTheme();
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
+    updateThemeIcon(document.documentElement.getAttribute('data-theme') || 'dark');
+  }
+  checkSession();
+});
+</script>
+</body>
+</html>

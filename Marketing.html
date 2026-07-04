@@ -1,0 +1,304 @@
+<script>
+// =====================================================
+//  HairCare Pro — Marketing.html
+//  الحملات التسويقية (Marketing Campaigns)
+// =====================================================
+
+var _campData = [];
+var _campLeads = [];
+
+async function renderMarketing() {
+  showLoading('جاري تحميل الحملات التسويقية...');
+  try {
+    _campData = await getDB('campaigns');
+    _campLeads = await getDB('leads');
+
+    // احتساب الإحصائيات
+    var totalExpected = _campData.reduce(function(acc, curr) { return acc + (parseFloat(curr.expectedBudget) || 0); }, 0);
+    var totalActual = _campData.reduce(function(acc, curr) { return acc + (parseFloat(curr.ActualBudget) || 0); }, 0);
+    var diff = totalActual - totalExpected;
+    var diffColor = diff > 0 ? '#EF4444' : '#10B981';
+    var diffBg = diff > 0 ? 'rgba(239,68,68,.15)' : 'rgba(16,185,129,.15)';
+    var diffLabel = diff > 0 ? 'تخطي الميزانية بـ: ' : 'توفير بالميزانية بـ: ';
+
+    var kpiCards = '<div class="grid-3">'
+      + statCard('fa-bullhorn', 'إجمالي الحملات', _campData.length, '', 'rgba(245,158,11,.15)', '#F59E0B')
+      + statCard('fa-coins', 'الميزانية المتوقعة', fmtCurrency(totalExpected), '', 'rgba(59,130,246,.15)', '#60A5FA')
+      + statCard('fa-receipt', 'الميزانية الفعلية', fmtCurrency(totalActual), diffLabel + fmtCurrency(Math.abs(diff)), diffBg, diffColor)
+      + '</div>';
+
+    var addBtn = canDo('marketing', 'c')
+      ? '<button class="btn-primary" onclick="openCampForm()"><i class="fas fa-plus ml-1"></i>حملة جديدة</button>'
+      : '';
+
+    var html = '<div class="section-header">'
+      + '  <h2><i class="fas fa-bullhorn text-brand ml-2"></i>الحملات التسويقية</h2>'
+      +   addBtn
+      + '</div>'
+      + kpiCards
+      + '<div class="table-wrap" style="padding: 16px; margin-top: 20px; margin-bottom: 20px;">'
+      + '  <div class="grid-2">'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">بحث باسم المصدر</label>'
+      + '      <input id="searchCamps" class="input-field" placeholder="ابحث عن Facebook, Google..." oninput="filterCamps()">'
+      + '    </div>'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">المصدر الأساسي</label>'
+      + '      <select id="filterCampSource" class="input-field" onchange="filterCamps()">'
+      + '        <option value="">— كل المصادر —</option>'
+      + '        <option value="Facebook">Facebook</option>'
+      + '        <option value="Google Ads">Google Ads</option>'
+      + '        <option value="Instagram">Instagram</option>'
+      + '        <option value="TikTok">TikTok</option>'
+      + '        <option value="LinkedIn">LinkedIn</option>'
+      + '        <option value="Twitter">Twitter</option>'
+      + '      </select>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>'
+      + '<div class="table-wrap">'
+      + '  <div class="table-inner">'
+      + '    <table>'
+      + '      <thead>'
+      + '        <tr>'
+      + '          <th>الرقم</th>'
+      + '          <th>مصدر الإعلان</th>'
+      + '          <th>تاريخ البدء</th>'
+      + '          <th>تاريخ الانتهاء</th>'
+      + '          <th>الميزانية المتوقعة</th>'
+      + '          <th>الميزانية الفعلية</th>'
+      + '          <th>الفرق</th>'
+      + '          <th>الحالة</th>'
+      + '          <th>إجراءات</th>'
+      + '        </tr>'
+      + '      </thead>'
+      + '      <tbody id="campTableBody">' + _renderCampRows(_campData) + '</tbody>'
+      + '    </table>'
+      + '  </div>'
+      + '</div>';
+
+    hideLoading();
+    return html;
+  } catch(e) {
+    console.error('renderMarketing error:', e);
+    hideLoading();
+    return '<div class="table-empty"><i class="fas fa-exclamation-circle text-danger"></i><p>حدث خطأ أثناء تحميل البيانات</p></div>';
+  }
+}
+
+function _renderCampRows(data) {
+  if (!data || data.length === 0) {
+    return '<tr><td colspan="9" class="table-empty"><i class="fas fa-bullhorn"></i><p>لا توجد حملات تسويقية مسجلة</p></td></tr>';
+  }
+
+  return data.map(function(c) {
+    var expected = parseFloat(c.expectedBudget) || 0;
+    var actual = parseFloat(c.ActualBudget) || 0;
+    var diff = actual - expected;
+    var diffClass = diff > 0 ? 'text-danger font-bold' : 'text-brand font-bold';
+    var diffPrefix = diff > 0 ? '+' : '';
+
+    var statusBadge = c.Status === 'نشطة' ? '<span class="badge badge-green">نشطة</span>'
+                    : (c.Status === 'منتهية' ? '<span class="badge badge-gray">منتهية</span>'
+                    : (c.Status === 'מתוקפת' || c.Status === 'متوقفة' ? '<span class="badge badge-red">متوقفة</span>'
+                    : '<span class="badge badge-yellow">مخطط لها</span>'));
+
+    var editBtn = canDo('marketing', 'u')
+      ? '<button class="btn-icon btn-icon-brand" onclick="openCampForm(\'' + c.CampaignID + '\')" title="تعديل"><i class="fas fa-edit"></i></button>'
+      : '';
+    var delBtn = canDo('marketing', 'd')
+      ? '<button class="btn-icon btn-icon-red" onclick="deleteCamp(\'' + c.CampaignID + '\')" title="حذف"><i class="fas fa-trash"></i></button>'
+      : '';
+    var viewLeadsBtn = '<button class="btn-icon btn-icon-blue" onclick="openCampLeads(\'' + c.CampaignID + '\')" title="عرض العملاء الجدد"><i class="fas fa-users"></i></button>';
+
+    return '<tr>'
+      + '  <td class="text-brand font-mono font-bold">' + c.CampaignID + '</td>'
+      + '  <td class="text-white font-bold">' + c.AdSource + '</td>'
+      + '  <td class="text-muted font-mono">' + fmtDate(c.Start) + '</td>'
+      + '  <td class="text-muted font-mono">' + fmtDate(c.End) + '</td>'
+      + '  <td class="font-mono">' + fmtCurrency(expected) + '</td>'
+      + '  <td class="font-mono">' + fmtCurrency(actual) + '</td>'
+      + '  <td class="font-mono ' + diffClass + '">' + diffPrefix + diff.toLocaleString('ar-EG') + ' ج</td>'
+      + '  <td>' + statusBadge + '</td>'
+      + '  <td class="actions">' + editBtn + ' ' + viewLeadsBtn + ' ' + delBtn + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function filterCamps() {
+  var q = document.getElementById('searchCamps').value.toLowerCase();
+  var src = document.getElementById('filterCampSource').value;
+
+  var filtered = _campData.filter(function(c) {
+    var matchQ = !q || c.AdSource.toLowerCase().includes(q) || c.CampaignID.toLowerCase().includes(q);
+    var matchSrc = !src || c.AdSource === src;
+    return matchQ && matchSrc;
+  });
+
+  document.getElementById('campTableBody').innerHTML = _renderCampRows(filtered);
+}
+
+function openCampForm(id) {
+  var camp = null;
+  if (id) {
+    camp = _campData.find(function(x) { return x.CampaignID === id; });
+  }
+
+  var sources = ['Facebook', 'Google Ads', 'Instagram', 'TikTok', 'Twitter', 'LinkedIn', 'YouTube', 'Snapchat'];
+  var sourceOpts = sources.map(function(s) {
+    return '<option value="' + s + '" ' + (camp && camp.AdSource === s ? 'selected' : '') + '>' + s + '</option>';
+  }).join('');
+
+  var html = '<div class="grid-2">'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">مصدر الإعلان</label>'
+    + '    <select id="f_cSource" class="input-field">' + sourceOpts + '</select>'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">حالة الحملة</label>'
+    + '    <select id="f_cStatus" class="input-field">'
+    + '      <option value="نشطة" ' + (camp && camp.Status === 'نشطة' ? 'selected' : '') + '>نشطة</option>'
+    + '      <option value="مخطط لها" ' + (camp && camp.Status === 'مخطط لها' ? 'selected' : '') + '>مخطط لها</option>'
+    + '      <option value="منتهية" ' + (camp && camp.Status === 'منتهية' ? 'selected' : '') + '>منتهية</option>'
+    + '      <option value="متوقفة" ' + (camp && camp.Status === 'متوقفة' ? 'selected' : '') + '>متوقفة</option>'
+    + '    </select>'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">تاريخ البدء</label>'
+    + '    <input id="f_cStart" type="date" class="input-field" value="' + (camp ? fmtDate(camp.Start) : nowDate()) + '">'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">تاريخ الانتهاء</label>'
+    + '    <input id="f_cEnd" type="date" class="input-field" value="' + (camp ? fmtDate(camp.End) : nowDate()) + '">'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">الميزانية المتوقعة</label>'
+    + '    <input id="f_cExpected" type="number" class="input-field" value="' + (camp ? camp.expectedBudget : '') + '" placeholder="0">'
+    + '  </div>'
+    + '  <div class="form-group">'
+    + '    <label class="form-label">الميزانية الفعلية</label>'
+    + '    <input id="f_cActual" type="number" class="input-field" value="' + (camp ? camp.ActualBudget : '') + '" placeholder="0">'
+    + '  </div>'
+    + '  <div class="form-group" style="grid-column: span 2;">'
+    + '    <label class="form-label">ملاحظات إضافية</label>'
+    + '    <textarea id="f_cNotes" class="input-field" rows="3">' + (camp ? camp.Notes : '') + '</textarea>'
+    + '  </div>'
+    + '</div>'
+    + '<div class="modal-footer">'
+    + '  <button class="btn-secondary" onclick="closeModal()">إلغاء</button>'
+    + '  <button class="btn-primary" onclick="saveCamp(\'' + (id || '') + '\')"><i class="fas fa-save ml-1"></i>حفظ الحملة</button>'
+    + '</div>';
+
+  openModal(id ? 'تعديل بيانات الحملة' : 'إنشاء حملة تسويقية جديدة', html);
+}
+
+async function saveCamp(id) {
+  var src = document.getElementById('f_cSource').value;
+  var status = document.getElementById('f_cStatus').value;
+  var start = document.getElementById('f_cStart').value;
+  var end = document.getElementById('f_cEnd').value;
+  var exp = parseFloat(document.getElementById('f_cExpected').value) || 0;
+  var act = parseFloat(document.getElementById('f_cActual').value) || 0;
+  var notes = document.getElementById('f_cNotes').value.trim();
+
+  if (!start || !end) {
+    toast('يرجى ملء جميع التواريخ المطلوبة', 'error');
+    return;
+  }
+
+  showLoading('جاري الحفظ...');
+  try {
+    var data = await getDB('campaigns');
+    var obj = {
+      AdSource: src,
+      Status: status,
+      Start: start,
+      End: end,
+      expectedBudget: exp,
+      ActualBudget: act,
+      Notes: notes,
+      Createdby: currentUser.EmpID,
+      MarketID: currentUser.EmpID
+    };
+
+    if (id) {
+      var idx = data.findIndex(function(x) { return x.CampaignID === id; });
+      if (idx > -1) {
+        obj.CampaignID = id;
+        Object.assign(data[idx], obj);
+      }
+    } else {
+      obj.CampaignID = await genID('C');
+      data.push(obj);
+    }
+
+    await setDB('campaigns', data);
+    hideLoading();
+    closeModal();
+    navigateTo('marketing');
+    toast(id ? 'تم تعديل الحملة التسويقية' : 'تم إضافة الحملة التسويقية بنجاح', 'success');
+  } catch(e) {
+    console.error('saveCamp error:', e);
+    hideLoading();
+    toast('حدث خطأ أثناء الحفظ', 'error');
+  }
+}
+
+async function deleteCamp(id) {
+  if (!confirm('هل تريد حذف هذه الحملة التسويقية نهائياً؟')) return;
+  showLoading('جاري حذف الحملة...');
+  try {
+    var data = await getDB('campaigns');
+    data = data.filter(function(x) { return x.CampaignID !== id; });
+    await setDB('campaigns', data);
+    hideLoading();
+    navigateTo('marketing');
+    toast('تم حذف الحملة بنجاح', 'info');
+  } catch(e) {
+    console.error('deleteCamp error:', e);
+    hideLoading();
+    toast('حدث خطأ أثناء الحذف', 'error');
+  }
+}
+
+function openCampLeads(id) {
+  var linkedLeads = _campLeads.filter(function(l) { return l.CampaignID === id; });
+
+  var rowsHtml = '';
+  if (linkedLeads.length === 0) {
+    rowsHtml = '<tr><td colspan="5" class="table-empty" style="padding: 20px;"><i class="fas fa-users"></i><p>لا يوجد عملاء محتملون مرتبطون بهذه الحملة</p></td></tr>';
+  } else {
+    rowsHtml = linkedLeads.map(function(l) {
+      return '<tr>'
+        + '  <td class="text-brand font-mono font-bold">' + l.LeadID + '</td>'
+        + '  <td class="text-white font-bold">' + l.Name + '</td>'
+        + '  <td class="font-mono">' + l.Phone + '</td>'
+        + '  <td class="text-muted font-mono">' + fmtDate(l.Createdtime) + '</td>'
+        + '  <td>' + leadStatusBadge(l.Status) + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  var html = '<div class="table-wrap">'
+    + '  <div class="table-inner">'
+    + '    <table>'
+    + '      <thead>'
+      + '        <tr>'
+      + '          <th>الرقم</th>'
+      + '          <th>الاسم</th>'
+      + '          <th>الهاتف</th>'
+      + '          <th>تاريخ التسجيل</th>'
+      + '          <th>الحالة</th>'
+      + '        </tr>'
+    + '      </thead>'
+    + '      <tbody>' + rowsHtml + '</tbody>'
+    + '    </table>'
+    + '  </div>'
+    + '</div>'
+    + '<div class="modal-footer">'
+    + '  <button class="btn-secondary" onclick="closeModal()">إغلاق</button>'
+    + '</div>';
+
+  openModal('العملاء المرتبطون بالحملة (' + id + ')', html, 'wide');
+}
+</script>

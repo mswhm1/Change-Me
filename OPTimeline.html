@@ -1,0 +1,111 @@
+<script>
+// =====================================================
+//  HairCare Pro — OPTimeline.html
+//  متابعة مراحل العمليات (Timeline)
+// =====================================================
+
+var _optlData = [];
+var _optlOps = [];
+
+async function renderOPTimeline() {
+  showLoading('جاري تحميل سجل متابعة العمليات...');
+  try {
+    _optlData = await getDB('optimeline');
+    _optlOps = await getDB('operations');
+    
+    var opOptions = '<option value="">— كل العمليات —</option>' + _optlOps.map(function(o) {
+      return '<option value="' + o.OperationID + '">' + o.OperationID + ' - ' + (o.PatientName || getPatientName(o.PatientID)) + '</option>';
+    }).join('');
+
+    var html = '<div class="section-header">'
+      + '<h2><i class="fas fa-stream text-brand ml-2"></i>متابعة مراحل العمليات</h2>'
+      + '</div>'
+      + '<div class="table-wrap" style="padding: 16px; margin-bottom: 20px;">'
+      + '  <div class="grid-2">'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">تصفية حسب العملية</label>'
+      + '      <select id="filterOpTL" class="input-field" onchange="filterOPTL()">' + opOptions + '</select>'
+      + '    </div>'
+      + '    <div class="form-group">'
+      + '      <label class="form-label">تصفية حسب الحالة</label>'
+      + '      <select id="filterStatusTL" class="input-field" onchange="filterOPTL()">'
+      + '        <option value="">— كل الحالات —</option>'
+      + '        <option value="جارية">جارية الآن</option>'
+      + '        <option value="مكتملة">مكتملة</option>'
+      + '      </select>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>'
+      + '<div class="space-y-4" id="opTLContainer">' + _renderTLCards(_optlData) + '</div>';
+
+    hideLoading();
+    return html;
+  } catch(e) {
+    console.error('renderOPTimeline error:', e);
+    hideLoading();
+    return '<div class="table-empty"><i class="fas fa-exclamation-circle text-danger"></i><p>حدث خطأ أثناء تحميل البيانات</p></div>';
+  }
+}
+
+function _renderTLCards(data) {
+  if (!data || data.length === 0) {
+    return '<div class="table-empty"><i class="fas fa-stream"></i><p>لا توجد مراحل مسجلة حالياً</p></div>';
+  }
+
+  var stageNames = {
+    punch: 'الخدش (Punch Extraction)',
+    slit: 'الشق (Slit Making)',
+    imp: 'الزراعة (Implantation)'
+  };
+  var stageIcons = {
+    punch: 'fa-circle-dot',
+    slit: 'fa-cut',
+    imp: 'fa-syringe'
+  };
+
+  return data.map(function(t) {
+    var isDone = t.Status === 'مكتملة';
+    var isActive = t.Status === 'جارية';
+    
+    var iconClass = stageIcons[t.Stage] || 'fa-tasks';
+    var stageLabel = stageNames[t.Stage] || t.Stage;
+    var statusClass = isDone ? 'badge-green' : (isActive ? 'badge-blue' : 'badge-gray');
+    var dotBg = isDone ? 'rgba(16,185,129,.15)' : (isActive ? 'rgba(59,130,246,.15)' : 'rgba(100,116,139,.15)');
+    var dotColor = isDone ? 'var(--brand)' : (isActive ? '#60A5FA' : 'var(--muted)');
+
+    return '<div class="timeline-item" style="margin-bottom: 12px;">'
+      + '  <div class="timeline-dot" style="background:' + dotBg + '; color:' + dotColor + ';">'
+      + '    <i class="fas ' + iconClass + '"></i>'
+      + '  </div>'
+      + '  <div style="flex:1;">'
+      + '    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:6px;">'
+      + '      <div>'
+      + '        <span class="text-brand font-mono font-bold" style="margin-left:8px;">' + t.OperationID + '</span>'
+      + '        <span class="text-white font-bold" style="font-size:14px;">' + stageLabel + '</span>'
+      + '      </div>'
+      + '      <span class="badge ' + statusClass + '">' + t.Status + '</span>'
+      + '    </div>'
+      + '    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;" class="text-muted">'
+      + '      <span style="font-size:12px;"><i class="fas fa-user-md ml-1"></i>المنفذ: ' + getEmpName(t.EmpID) + '</span>'
+      + '      <span style="font-size:12px;">'
+      + '        <i class="fas fa-clock ml-1"></i>البداية: ' + (t.Start || '—') + ' | النهاية: ' + (t.End || '—')
+      + '      </span>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>';
+  }).join('');
+}
+
+function filterOPTL() {
+  var opId = document.getElementById('filterOpTL').value;
+  var status = document.getElementById('filterStatusTL').value;
+  
+  var filtered = _optlData.filter(function(t) {
+    var matchOp = !opId || t.OperationID === opId;
+    var matchStatus = !status || t.Status === status;
+    return matchOp && matchStatus;
+  });
+  
+  document.getElementById('opTLContainer').innerHTML = _renderTLCards(filtered);
+}
+</script>
